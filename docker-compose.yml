@@ -1,0 +1,44 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: agent_command_center
+      POSTGRES_USER: acc_user
+      POSTGRES_PASSWORD: acc_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acc_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:8
+    ports:
+      - "6379:6379"
+    command: ["valkey", "server", "--host", "0.0.0.0", "--port", "6379"]
+    volumes:
+      - valkey-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w 3 localhost 6379 | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ntfy:
+    image: binwiederhier/ntfy:2
+    ports:
+      - "8000:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:80/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  valkey-data:

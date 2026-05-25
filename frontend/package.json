@@ -1,0 +1,15 @@
+{
+  "name": "agent-command-center-frontend",
+  "version": "0.0.1",
+  "description": "Frontend for the Agent Command Center",
+  "private": false,
+  "type": "module",
+  "packageManager": "bun@1.0.0",
+  "scripts": {
+    "dev": "bun dev",
+    "build": "bun build",
+    "start": "bun run start"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

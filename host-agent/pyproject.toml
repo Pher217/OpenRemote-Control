@@ -1,0 +1,10 @@
+[project]
+name = "agent-command-center-host-agent"
+version = "0.0.1"
+description = "Host agent daemon for the Agent Command Center"
+requires-python = ">=3.13"
+dependencies = []
+
+[build-system]
+requires = ["hatchling>=1.20"]
+build-backend = "hatchling.build"
