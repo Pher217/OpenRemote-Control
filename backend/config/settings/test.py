@@ -9,7 +9,7 @@ SECRET_KEY = "test-secret-key"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("POSTGRES_DB", "agent_command_center_test"),
+        "NAME": os.environ.get("POSTGRES_DB", "openremote_control_test"),
         "USER": os.environ.get("POSTGRES_USER", "acc_user"),
         "PASSWORD": os.environ.get("POSTGRES_PASSWORD", "acc_password"),
         "HOST": os.environ.get("POSTGRES_HOST", "localhost"),

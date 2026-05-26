@@ -1,4 +1,4 @@
-# Agent Command Center — Threat Model
+# OpenRemote Control — Threat Model
 
 > Document: T-104a  
 > Status: Accepted  

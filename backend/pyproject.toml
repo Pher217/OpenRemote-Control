@@ -1,7 +1,7 @@
 [project]
-name = "agent-command-center-backend"
+name = "openremote-control-backend"
 version = "0.0.1"
-description = "Backend for the Agent Command Center"
+description = "Backend for OpenRemote Control"
 requires-python = ">=3.13"
 dependencies = [
     "Django>=5.1,<5.2",

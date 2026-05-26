@@ -1,7 +1,7 @@
 [project]
-name = "agent-command-center-host-agent"
+name = "openremote-control-host-agent"
 version = "0.0.1"
-description = "Host agent daemon for the Agent Command Center"
+description = "Host agent daemon for OpenRemote Control"
 requires-python = ">=3.13"
 dependencies = [
     "websockets>=13.0",

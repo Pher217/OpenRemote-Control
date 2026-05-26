@@ -1,7 +1,7 @@
 {
-  "name": "agent-command-center-frontend",
+  "name": "openremote-control-frontend",
   "version": "0.0.1",
-  "description": "Frontend for the Agent Command Center",
+  "description": "Frontend for OpenRemote Control",
   "private": false,
   "type": "module",
   "scripts": {

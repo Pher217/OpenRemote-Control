@@ -1,8 +1,8 @@
-# Agent Command Center
+# OpenRemote Control
 
 > Private, local-first cockpit for supervising AI agents across machines, projects, and runtimes — one mobile-first inbox where every coding CLI, model API, voice agent, or business agent appears as a thread, controllable with universal slash commands, with parallel sessions across multiple machines and accounts.
 
-**Status:** specification phase. No runnable code yet.
+**Status:** Phase 1 backend implementation in progress. Django scaffold, models, API layer, audit signals, policy permissions, WebSocket consumer, and Celery tasks are implemented with 72 passing tests.
 
 ## What this is
 
