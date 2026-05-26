@@ -50,7 +50,7 @@ jobs:
         run: python -m mypy --ignore-missing-imports . || true
       - name: Security check with bandit
         working-directory: backend
-        run: python -m bandit -r . || true
+        run: python -m bandit -r . --skip B101 || true
       - name: Run tests
         working-directory: backend
         env:

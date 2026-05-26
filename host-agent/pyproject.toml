@@ -10,7 +10,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "cryptography>=43.0",
     "pyyaml>=6.0",
-    " GitPython>=3.1",
+    "GitPython>=3.1",
     "watchdog>=5.0",
 ]
 
@@ -46,3 +46,6 @@ disallow_untyped_defs = true
 
 [tool.bandit]
 exclude_dirs = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["agent_host"]
