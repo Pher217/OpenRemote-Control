@@ -3,8 +3,46 @@ name = "agent-command-center-host-agent"
 version = "0.0.1"
 description = "Host agent daemon for the Agent Command Center"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "websockets>=13.0",
+    "httpx>=0.27",
+    "structlog>=24.4",
+    "python-dotenv>=1.0",
+    "cryptography>=43.0",
+    "pyyaml>=6.0",
+    " GitPython>=3.1",
+    "watchdog>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "bandit[toml]>=1.7",
+    "coverage>=7.6",
+]
+unix = ["ptyprocess>=0.7"]
+windows = ["pywinpty>=2.0"]
 
 [build-system]
 requires = ["hatchling>=1.20"]
 build-backend = "hatchling.build"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.bandit]
+exclude_dirs = ["tests"]

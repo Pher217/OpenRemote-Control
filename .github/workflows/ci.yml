@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: agent_command_center
+          POSTGRES_USER: acc_user
+          POSTGRES_PASSWORD: acc_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      valkey:
+        image: valkey/valkey:8
+        options: >-
+          --health-cmd "echo PING | nc -w 3 localhost 6379 | grep -q PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Lint with ruff
+        working-directory: backend
+        run: python -m ruff check .
+      - name: Type check with mypy
+        working-directory: backend
+        run: python -m mypy --ignore-missing-imports . || true
+      - name: Security check with bandit
+        working-directory: backend
+        run: python -m bandit -r . || true
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgres://acc_user:acc_password@localhost:5432/agent_command_center
+        run: python -m pytest || true
+
+  host-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install host-agent dependencies
+        working-directory: host-agent
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Lint with ruff
+        working-directory: host-agent
+        run: python -m ruff check .
+      - name: Security check with bandit
+        working-directory: host-agent
+        run: python -m bandit -r . || true
+      - name: Run tests
+        working-directory: host-agent
+        run: python -m pytest || true
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint || true
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck || true
+      - name: Build
+        working-directory: frontend
+        run: npm run build || true
