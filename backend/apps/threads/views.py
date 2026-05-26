@@ -1,5 +1,6 @@
-from rest_framework import decorators, response, viewsets
+from rest_framework import decorators, permissions, response, viewsets
 
+from apps.policies.permissions import PolicyPermission
 from apps.threads.models import Message, Thread
 from apps.threads.serializers import MessageSerializer, ThreadSerializer
 
@@ -7,6 +8,7 @@ from apps.threads.serializers import MessageSerializer, ThreadSerializer
 class ThreadViewSet(viewsets.ModelViewSet):
     queryset = Thread.objects.all()
     serializer_class = ThreadSerializer
+    permission_classes = [permissions.IsAuthenticated, PolicyPermission]
 
     @decorators.action(detail=True, methods=["get", "post"])
     def messages(self, request, pk=None):
