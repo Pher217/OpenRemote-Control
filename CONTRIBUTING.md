@@ -1,14 +1,14 @@
 # Contributing
 
-Thank you for your interest in this project. **It is currently in specification phase — no runnable code yet.** Contributions at this stage are most useful as:
+Thank you for your interest in this project. **The backend foundation exists; runtime adapters, the host daemon, and the frontend are not built yet.** Contributions at this stage are most useful as:
 
-1. **Review of the specification.** Read [docs/specs/agent-command-center-v5-build-spec.md](docs/specs/agent-command-center-v5-build-spec.md) and the V5 addendum + Codex review. Open issues if you spot gaps, conflicts, or unrealistic assumptions.
-2. **Threat model contributions.** The MVP gates implementation on a threat model. See `docs/security/threat-model-pending.md` once it exists.
-3. **Adapter design proposals.** If you maintain or use an agent runtime you'd like to integrate, open a discussion with: how its session lifecycle works, what auth modes it supports, what events/hooks it exposes, what platform constraints apply.
+1. **Adapter design proposals.** If you maintain or use an agent runtime you'd like to integrate, open a discussion with: how its session lifecycle works, what auth modes it supports, what events/hooks it exposes, what platform constraints apply.
+2. **Threat model contributions.** The MVP gates implementation on a threat model. See `docs/security/threat-model.md`.
+3. **Bug reports and tests** against the existing backend apps.
 
-## When code starts
+The detailed design specification and delegated task breakdown are maintained in the maintainer's private knowledge base; open an issue if you need design context for a contribution.
 
-The project follows the workflow in `docs/specs/agent-command-center-v5-build-spec.md` §8:
+## Workflow
 
 - Every change goes through a delegation packet (worker tier + scope + verification command + acceptance).
 - Every PR runs CI (Python: `ruff` + `pytest`; TypeScript: `eslint` + `vitest` + `playwright`).
