@@ -35,7 +35,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "id",
             "thread",
             "role",
-            "content",
+            "redacted_content",
             "sequence",
             "metadata",
             "created_at",

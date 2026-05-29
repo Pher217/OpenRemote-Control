@@ -9,6 +9,10 @@ class Thread(models.Model):
         RC = "rc", "Remote Control"
         EXEC = "exec", "Exec"
         API = "api", "API"
+        SDK = "sdk", "Claude Agent (SDK)"
+        OBSERVED = "observed", "Observed"
+        OPENCLAW = "openclaw", "OpenClaw"
+        HERMES = "hermes", "Hermes"
 
     class StatusChoices(models.TextChoices):
         PENDING = "pending", "Pending"
@@ -50,6 +54,7 @@ class Thread(models.Model):
     external_session_ref = models.CharField(max_length=1024, blank=True)
     worktree_path = models.CharField(max_length=1024, blank=True)
     branch_name = models.CharField(max_length=255, blank=True)
+    observed_jsonl_path = models.CharField(max_length=1024, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     last_event_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
@@ -85,7 +90,7 @@ class Message(models.Model):
         related_name="messages",
     )
     role = models.CharField(max_length=16, choices=RoleChoices.choices)
-    content = models.TextField()
+    redacted_content = models.TextField()
     raw_content_encrypted = models.BinaryField(null=True, blank=True)
     raw_retention_expires_at = models.DateTimeField(null=True, blank=True)
     sequence = models.PositiveIntegerField()

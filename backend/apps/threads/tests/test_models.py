@@ -1,4 +1,6 @@
 import pytest
+from django.db import transaction
+from django.db.utils import IntegrityError
 
 from apps.accounts.models import Account
 from apps.hosts.models import Host
@@ -85,9 +87,60 @@ class TestThreadModel:
         msg = Message.objects.create(
             thread=thread,
             role=Message.RoleChoices.USER,
-            content="redacted prompt here",
+            redacted_content="redacted prompt here",
             sequence=1,
         )
-        assert msg.content == "redacted prompt here"
+        assert msg.redacted_content == "redacted prompt here"
         assert msg.raw_content_encrypted is None
         assert msg.raw_retention_expires_at is None
+
+    def test_redacted_content_not_null(self):
+        """GIVEN a Message WHEN redacted_content is None THEN IntegrityError is raised."""
+        account = Account.objects.create(
+            provider="ollama",
+            label="local",
+            auth_type="none",
+            credential_type="none",
+            encrypted_credential=b"",
+            credential_key_id="k4",
+            credential_recipient="r4",
+        )
+        thread = Thread.objects.create(
+            name="null-test",
+            runtime="ollama",
+            runtime_mode=Thread.RuntimeModeChoices.API,
+            account=account,
+        )
+        field_names = [f.name for f in Message._meta.get_fields()]
+        assert "content" not in field_names
+        assert "redacted_content" in field_names
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Message.objects.create(
+                thread=thread,
+                role=Message.RoleChoices.USER,
+                redacted_content=None,
+                sequence=1,
+            )
+
+    def test_runtime_mode_sdk_choices(self):
+        """GIVEN the SDK runtime mode WHEN a Thread is created THEN it persists."""
+        account = Account.objects.create(
+            provider="anthropic",
+            label="sdk",
+            auth_type="oauth",
+            credential_type="token",
+            encrypted_credential=b"z",
+            credential_key_id="k5",
+            credential_recipient="r5",
+        )
+        thread = Thread.objects.create(
+            name="sdk-thread",
+            runtime="claude_code",
+            runtime_mode="sdk",
+            account=account,
+        )
+        assert thread.runtime_mode == "sdk"
+        values = Thread.RuntimeModeChoices.values
+        assert "observed" in values
+        assert "openclaw" in values
+        assert "hermes" in values

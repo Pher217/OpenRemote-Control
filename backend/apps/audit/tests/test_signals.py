@@ -18,7 +18,7 @@ class TestAuditSignals:
     def test_message_send_emits_audit_event(self):
         account = Account.objects.create(provider="anthropic", label="m", auth_type="oauth", credential_type="token")
         thread = Thread.objects.create(name="audit-msg", runtime="claude_code", account=account)
-        Message.objects.create(thread=thread, role="user", content="hello", sequence=1)
+        Message.objects.create(thread=thread, role="user", redacted_content="hello", sequence=1)
         event = AuditEvent.objects.filter(thread=thread, event_type=AuditEvent.EventTypeChoices.MESSAGE_SEND).first()
         assert event is not None
         assert event.redacted_payload["role"] == "user"

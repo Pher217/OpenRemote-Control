@@ -46,7 +46,7 @@ class TestThreadAPI:
     def test_list_thread_messages(self, authenticated_client):
         account = Account.objects.create(provider="anthropic", label="m", auth_type="oauth", credential_type="token")
         thread = Thread.objects.create(name="msg-thread", runtime="claude_code", account=account)
-        Message.objects.create(thread=thread, role="user", content="hello", sequence=1)
+        Message.objects.create(thread=thread, role="user", redacted_content="hello", sequence=1)
         response = authenticated_client.get(f"/api/threads/{thread.id}/messages/")
         assert response.status_code == 200
         assert isinstance(response.data, list)
@@ -55,8 +55,8 @@ class TestThreadAPI:
     def test_create_thread_message(self, authenticated_client):
         account = Account.objects.create(provider="anthropic", label="m2", auth_type="oauth", credential_type="token")
         thread = Thread.objects.create(name="msg-thread-2", runtime="claude_code", account=account)
-        payload = {"role": "assistant", "content": "hi", "sequence": 1}
+        payload = {"role": "assistant", "redacted_content": "hi", "sequence": 1}
         response = authenticated_client.post(f"/api/threads/{thread.id}/messages/", payload, format="json")
         assert response.status_code == 201
-        assert response.data["content"] == "hi"
+        assert response.data["redacted_content"] == "hi"
 
