@@ -1,14 +1,15 @@
-import httpx
+import os
+
 import pytest
 
 from apps.accounts.models import Account
 from apps.threads.models import Thread
 from apps.tier2.ollama import OllamaAdapter
 
-try:
-    httpx.get("http://localhost:11434/api/tags", timeout=3.0)
-except Exception:
-    pytest.skip("Local Ollama not reachable", allow_module_level=True)
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_OLLAMA_LIVE") != "1",
+    reason="live Ollama test; set RUN_OLLAMA_LIVE=1 to run",
+)
 
 
 @pytest.fixture
