@@ -1,6 +1,8 @@
 import httpx
 from django.conf import settings
 
+FORUM_ICON_COLORS = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
+
 
 def _base_url() -> str:
     return f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
@@ -16,11 +18,24 @@ def redact_token(text: str) -> str:
     return text.replace(token, "***") if token else text
 
 
-async def send_message(chat_id, text) -> None:
+async def create_forum_topic(chat_id, name, icon_color) -> int:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/createForumTopic",
+            json={"chat_id": chat_id, "name": name[:128], "icon_color": icon_color},
+        )
+        resp.raise_for_status()
+        return resp.json()["result"]["message_thread_id"]
+
+
+async def send_message(chat_id, text, message_thread_id=None) -> None:
+    payload = {"chat_id": chat_id, "text": text}
+    if message_thread_id is not None:
+        payload["message_thread_id"] = message_thread_id
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         resp = await client.post(
             f"{_base_url()}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
+            json=payload,
         )
         resp.raise_for_status()
 

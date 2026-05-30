@@ -18,11 +18,30 @@ class Command(BaseCommand):
         projects_dir = Path(configured) if configured else Path.home() / ".claude" / "projects"
         self.stdout.write(f"Observing Claude Code sessions in {projects_dir}")
 
+        forum_chat_id = getattr(settings, "TELEGRAM_FORUM_CHAT_ID", "")
+        if forum_chat_id:
+            self.stdout.write(f"observer: streaming to Telegram forum {forum_chat_id}")
+        else:
+            self.stdout.write(
+                "observer: stdout mode (set TELEGRAM_FORUM_CHAT_ID to stream to Telegram)"
+            )
+
         offsets: dict[Path, int] = {}
         seen: set = set()
 
         async def on_turn(thread, p, msg):
-            self.stdout.write(f"[{p['session_id'][:8]}] {p['role']}: {p['text'][:80]}")
+            if forum_chat_id:
+                from apps.observe.delivery import deliver_turn
+                from apps.telegram.telegram_api import redact_token
+
+                try:
+                    await deliver_turn(
+                        thread, p, msg, forum_chat_id=int(forum_chat_id)
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.stderr.write(f"observer deliver error: {redact_token(str(exc))}")
+            else:
+                self.stdout.write(f"[{p['session_id'][:8]}] {p['role']}: {p['text'][:80]}")
 
         while True:
             try:
