@@ -28,10 +28,12 @@ async def create_forum_topic(chat_id, name, icon_color) -> int:
         return resp.json()["result"]["message_thread_id"]
 
 
-async def send_message(chat_id, text, message_thread_id=None) -> None:
+async def send_message(chat_id, text, message_thread_id=None, parse_mode=None) -> None:
     payload = {"chat_id": chat_id, "text": text}
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         resp = await client.post(
             f"{_base_url()}/sendMessage",

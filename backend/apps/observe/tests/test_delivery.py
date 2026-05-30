@@ -19,8 +19,8 @@ class _FakeApi:
         self._next_id += 1
         return topic_id
 
-    async def send_message(self, chat_id, text, message_thread_id=None):
-        self.send_calls.append((chat_id, text, message_thread_id))
+    async def send_message(self, chat_id, text, message_thread_id=None, parse_mode=None):
+        self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
 
 
 @pytest.mark.django_db(transaction=True)
@@ -61,9 +61,12 @@ async def test_creates_one_topic_per_session_and_routes():
     b_sends = [c for c in fake.send_calls if c[2] == topic_b]
     assert len(a_sends) == 2
     assert len(b_sends) == 1
-    assert a_sends[0][1] == "user: hi"
-    assert a_sends[1][1] == "assistant: yo"
-    assert b_sends[0][1] == "user: hey"
+    for _chat_id, text, _topic, parse_mode in fake.send_calls:
+        assert parse_mode == "HTML"
+        assert text.startswith("<b>")
+    assert a_sends[0][1].endswith("hi")
+    assert a_sends[1][1].endswith("yo")
+    assert b_sends[0][1].endswith("hey")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -86,6 +89,38 @@ async def test_truncates_long_text():
     sent_text = fake.send_calls[0][1]
     assert len(sent_text) <= TELEGRAM_MAX
     assert sent_text.endswith("…")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_falls_back_to_plain_text_on_html_send_failure():
+    """GIVEN the HTML send raises WHEN delivered THEN a plain-text send follows."""
+
+    class _FailingHtmlApi(_FakeApi):
+        async def send_message(
+            self, chat_id, text, message_thread_id=None, parse_mode=None
+        ):
+            if parse_mode == "HTML":
+                raise RuntimeError("can't parse entities")
+            self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
+
+    fake = _FailingHtmlApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sfallbck", "/tmp/f.jsonl"
+    )
+    turn = {
+        "role": "user",
+        "text": "<bad html",
+        "uuid": "1",
+        "session_id": "Sfallbck",
+    }
+
+    await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+
+    assert len(fake.send_calls) == 1
+    _chat_id, text, _topic, parse_mode = fake.send_calls[0]
+    assert parse_mode is None
+    assert text == "You: <bad html"
 
 
 def test_pick_color_deterministic():

@@ -1,5 +1,7 @@
 from channels.db import database_sync_to_async
+from django.conf import settings
 
+from apps.observe.formatting import format_turn
 from apps.telegram import telegram_api
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 
@@ -36,8 +38,20 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
     else:
         topic_id = existing
 
-    text = f"{parsed['role']}: {parsed['text']}"
-    if len(text) > TELEGRAM_MAX:
-        text = text[: TELEGRAM_MAX - 1] + "…"
-
-    await api.send_message(forum_chat_id, text, message_thread_id=topic_id)
+    html = format_turn(
+        parsed,
+        user_label=settings.TELEGRAM_USER_LABEL,
+        assistant_label=settings.TELEGRAM_ASSISTANT_LABEL,
+    )
+    try:
+        await api.send_message(
+            forum_chat_id, html, message_thread_id=topic_id, parse_mode="HTML"
+        )
+    except Exception:
+        label = (
+            settings.TELEGRAM_USER_LABEL
+            if parsed["role"] == "user"
+            else settings.TELEGRAM_ASSISTANT_LABEL
+        )
+        plain = f"{label}: {parsed['text'][:3900]}"
+        await api.send_message(forum_chat_id, plain, message_thread_id=topic_id)
