@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "apps.skills",
     "apps.slash",
     "apps.telegram",
+    "apps.observe",
 ]
 
 MIDDLEWARE = [
@@ -142,6 +143,8 @@ TELEGRAM_ALLOWED_CHAT_IDS = {
     if x
 }
 TELEGRAM_DEFAULT_MODEL = os.environ.get("TELEGRAM_DEFAULT_MODEL", "kimi-k2.6:cloud")
+
+OBSERVE_CLAUDE_PROJECTS_DIR = os.environ.get("OBSERVE_CLAUDE_PROJECTS_DIR", "")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
