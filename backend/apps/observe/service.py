@@ -2,6 +2,7 @@ from channels.db import database_sync_to_async
 from django.db.models import Max
 
 from apps.accounts.models import Account
+from apps.observe.parser import scan_file_meta
 from apps.threads.models import Message, Thread
 
 OBSERVER_PROVIDER = "claude_code"
@@ -13,17 +14,40 @@ def get_or_create_observed_thread(session_id, jsonl_path) -> Thread:
         label="observer",
         defaults={"auth_type": "none", "credential_type": "none"},
     )
-    thread, _ = Thread.objects.get_or_create(
+    existing = Thread.objects.filter(external_session_ref=session_id).first()
+    if existing is not None:
+        return existing
+    meta = scan_file_meta(jsonl_path)
+    return Thread.objects.create(
         external_session_ref=session_id,
-        defaults={
-            "name": f"claude_code:{session_id[:8]}",
-            "runtime": "claude_code",
-            "runtime_mode": Thread.RuntimeModeChoices.OBSERVED,
-            "observed_jsonl_path": str(jsonl_path),
-            "account": account,
+        name=meta.get("title") or f"claude_code:{session_id[:8]}",
+        runtime="claude_code",
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        observed_jsonl_path=str(jsonl_path),
+        account=account,
+        metadata={
+            "provider": OBSERVER_PROVIDER,
+            "repo": meta.get("repo", ""),
+            "branch": meta.get("branch", ""),
+            "title": meta.get("title", ""),
         },
     )
-    return thread
+
+
+def apply_session_meta(thread, meta) -> bool:
+    changed = False
+    for key in ("repo", "branch", "title"):
+        value = meta.get(key)
+        if value and thread.metadata.get(key) != value:
+            thread.metadata[key] = value
+            changed = True
+    if not changed:
+        return False
+    new_title = meta.get("title")
+    if new_title and thread.name != new_title:
+        thread.name = new_title
+    thread.save(update_fields=["metadata", "name"])
+    return True
 
 
 @database_sync_to_async

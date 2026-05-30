@@ -1,7 +1,11 @@
 from channels.db import database_sync_to_async
 
-from apps.observe.parser import parse_line
-from apps.observe.service import get_or_create_observed_thread, record_turn
+from apps.observe.parser import extract_session_meta, parse_line
+from apps.observe.service import (
+    apply_session_meta,
+    get_or_create_observed_thread,
+    record_turn,
+)
 
 
 def read_new_lines(path, offset) -> tuple[list[str], int]:
@@ -23,6 +27,14 @@ async def process_lines(lines, jsonl_path, *, on_turn, seen=None):
     if seen is None:
         seen = set()
     for raw in lines:
+        meta = extract_session_meta(raw)
+        meta_session = meta.pop("session_id", None)
+        if meta and meta_session:
+            thread = await database_sync_to_async(get_or_create_observed_thread)(
+                meta_session, jsonl_path
+            )
+            await database_sync_to_async(apply_session_meta)(thread, meta)
+
         p = parse_line(raw)
         if p is None or p["uuid"] in seen:
             continue

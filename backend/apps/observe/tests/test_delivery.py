@@ -1,8 +1,8 @@
 import pytest
 from channels.db import database_sync_to_async
 
-from apps.observe.delivery import TELEGRAM_MAX, deliver_turn, pick_color
-from apps.observe.service import get_or_create_observed_thread
+from apps.observe.delivery import TELEGRAM_MAX, _topic_name, deliver_turn, pick_color
+from apps.observe.service import apply_session_meta, get_or_create_observed_thread
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 from apps.threads.models import Thread
 
@@ -57,16 +57,22 @@ async def test_creates_one_topic_per_session_and_routes():
     assert topic_b is not None
     assert topic_a != topic_b
 
-    a_sends = [c for c in fake.send_calls if c[2] == topic_a]
-    b_sends = [c for c in fake.send_calls if c[2] == topic_b]
-    assert len(a_sends) == 2
-    assert len(b_sends) == 1
     for _chat_id, text, _topic, parse_mode in fake.send_calls:
         assert parse_mode == "HTML"
         assert text.startswith("<b>")
-    assert a_sends[0][1].endswith("hi")
-    assert a_sends[1][1].endswith("yo")
-    assert b_sends[0][1].endswith("hey")
+
+    a_sends = [c for c in fake.send_calls if c[2] == topic_a]
+    b_sends = [c for c in fake.send_calls if c[2] == topic_b]
+    # one intro + the turns per topic
+    assert len(a_sends) == 3
+    assert len(b_sends) == 2
+    a_intro, a_turns = a_sends[0], a_sends[1:]
+    b_intro, b_turns = b_sends[0], b_sends[1:]
+    assert "session" in a_intro[1]
+    assert "session" in b_intro[1]
+    assert a_turns[0][1].endswith("hi")
+    assert a_turns[1][1].endswith("yo")
+    assert b_turns[0][1].endswith("hey")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -86,7 +92,7 @@ async def test_truncates_long_text():
 
     await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
 
-    sent_text = fake.send_calls[0][1]
+    sent_text = fake.send_calls[-1][1]
     assert len(sent_text) <= TELEGRAM_MAX
     assert sent_text.endswith("…")
 
@@ -108,6 +114,13 @@ async def test_falls_back_to_plain_text_on_html_send_failure():
     thread = await database_sync_to_async(get_or_create_observed_thread)(
         "Sfallbck", "/tmp/f.jsonl"
     )
+
+    @database_sync_to_async
+    def _pre_create_topic():
+        thread.metadata["telegram_topic_id"] = 4242
+        thread.save(update_fields=["metadata"])
+
+    await _pre_create_topic()
     turn = {
         "role": "user",
         "text": "<bad html",
@@ -121,6 +134,44 @@ async def test_falls_back_to_plain_text_on_html_send_failure():
     _chat_id, text, _topic, parse_mode = fake.send_calls[0]
     assert parse_mode is None
     assert text == "You: <bad html"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_topic_name_and_intro_from_meta():
+    """GIVEN a thread with meta WHEN a topic is created THEN name is prov·repo·title
+    and a single HTML intro precedes the turn; a later turn reuses the topic."""
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Smeta123", "/tmp/m.jsonl"
+    )
+    await database_sync_to_async(apply_session_meta)(
+        thread,
+        {"repo": "agent-command-center", "branch": "claude/x", "title": "My Title"},
+    )
+
+    assert _topic_name(thread) == "claude_code · agent-command-center · My Title"
+    assert len(_topic_name(thread)) <= 128
+
+    turn1 = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Smeta123"}
+    turn2 = {"role": "assistant", "text": "yo", "uuid": "2", "session_id": "Smeta123"}
+
+    await deliver_turn(thread, turn1, None, forum_chat_id=-100999, api=fake)
+    await deliver_turn(thread, turn2, None, forum_chat_id=-100999, api=fake)
+
+    assert len(fake.create_calls) == 1
+    _chat_id, name, _color = fake.create_calls[0]
+    assert name == "claude_code · agent-command-center · My Title"
+
+    intro, parse_mode = fake.send_calls[0][1], fake.send_calls[0][3]
+    assert parse_mode == "HTML"
+    assert "<code>agent-command-center</code>" in intro
+    assert "<b>My Title</b>" in intro
+    assert "session <code>Smeta123</code>" in intro
+
+    intros = [c for c in fake.send_calls if "session <code>" in c[1]]
+    assert len(intros) == 1
+    assert len(fake.send_calls) == 3
 
 
 def test_pick_color_deterministic():
