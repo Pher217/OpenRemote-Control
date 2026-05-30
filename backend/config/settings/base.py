@@ -207,6 +207,18 @@ LOGGING = {
             "level": "WARNING",
             "propagate": False,
         },
+        # httpx/httpcore log each request URL at INFO; those URLs can carry
+        # secrets (e.g. the Telegram bot token in the path). Keep them quiet.
+        "httpx": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "httpcore": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
     },
 }
 
