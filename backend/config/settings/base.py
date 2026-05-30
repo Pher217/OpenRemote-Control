@@ -2,8 +2,13 @@ import os
 from pathlib import Path
 
 import structlog
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Load backend/.env (gitignored) so local secrets like TELEGRAM_BOT_TOKEN are
+# available via os.environ. No-op when the file is absent (e.g. CI).
+load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-key-do-not-use-in-production")
 
