@@ -6,9 +6,11 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# Load backend/.env (gitignored) so local secrets like TELEGRAM_BOT_TOKEN are
-# available via os.environ. No-op when the file is absent (e.g. CI).
-load_dotenv(BASE_DIR / ".env")
+# Load local secrets (e.g. TELEGRAM_BOT_TOKEN) into os.environ. Reads the
+# repo-root .env first (where docker-compose and the project .env live), then
+# backend/.env which overrides if present. Both are gitignored; no-op if absent.
+load_dotenv(BASE_DIR.parent / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-key-do-not-use-in-production")
 
