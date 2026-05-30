@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     "apps.audit",
     "apps.skills",
     "apps.slash",
+    "apps.telegram",
 ]
 
 MIDDLEWARE = [
@@ -126,6 +127,14 @@ MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_ALLOWED_CHAT_IDS = {
+    int(x)
+    for x in os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "").replace(" ", "").split(",")
+    if x
+}
+TELEGRAM_DEFAULT_MODEL = os.environ.get("TELEGRAM_DEFAULT_MODEL", "kimi-k2.6:cloud")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
