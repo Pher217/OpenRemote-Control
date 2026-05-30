@@ -20,7 +20,7 @@ services:
     image: valkey/valkey:8
     ports:
       - "6379:6379"
-    command: ["valkey", "server", "--host", "0.0.0.0", "--port", "6379"]
+    command: ["valkey-server", "--bind", "0.0.0.0", "--port", "6379"]
     volumes:
       - valkey-data:/data
     healthcheck:
