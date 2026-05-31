@@ -1,0 +1,67 @@
+import httpx
+from django.conf import settings
+
+FORUM_ICON_COLORS = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
+
+
+def _base_url() -> str:
+    return f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}"
+
+
+def redact_token(text: str) -> str:
+    """Strip the bot token from any text before it reaches logs.
+
+    httpx error messages embed the request URL, which contains the token in its
+    path (.../bot<token>/...). Never log such a string un-redacted.
+    """
+    token = settings.TELEGRAM_BOT_TOKEN
+    return text.replace(token, "***") if token else text
+
+
+async def create_forum_topic(chat_id, name, icon_color) -> int:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/createForumTopic",
+            json={"chat_id": chat_id, "name": name[:128], "icon_color": icon_color},
+        )
+        resp.raise_for_status()
+        return resp.json()["result"]["message_thread_id"]
+
+
+async def edit_forum_topic(chat_id, message_thread_id, name) -> None:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/editForumTopic",
+            json={
+                "chat_id": chat_id,
+                "message_thread_id": message_thread_id,
+                "name": name[:128],
+            },
+        )
+        resp.raise_for_status()
+
+
+async def send_message(chat_id, text, message_thread_id=None, parse_mode=None) -> None:
+    payload = {"chat_id": chat_id, "text": text}
+    if message_thread_id is not None:
+        payload["message_thread_id"] = message_thread_id
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/sendMessage",
+            json=payload,
+        )
+        resp.raise_for_status()
+
+
+async def get_updates(offset, timeout=50):
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=5.0, read=timeout + 10, write=5.0, pool=5.0)
+    ) as client:
+        resp = await client.get(
+            f"{_base_url()}/getUpdates",
+            params={"offset": offset, "timeout": timeout},
+        )
+        resp.raise_for_status()
+        return resp.json().get("result", [])
