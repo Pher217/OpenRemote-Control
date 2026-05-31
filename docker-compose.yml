@@ -5,7 +5,7 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: agent_command_center
+      POSTGRES_DB: openremote_control
       POSTGRES_USER: acc_user
       POSTGRES_PASSWORD: acc_password
     volumes:
@@ -29,15 +29,7 @@ services:
       timeout: 5s
       retries: 5
 
-  ntfy:
-    image: binwiederhier/ntfy:2
-    ports:
-      - "8000:80"
-    healthcheck:
-      test: ["CMD-SHELL", "wget --spider --quiet http://localhost:80/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # ntfy re-added with notifications (Phase 9)
 
 volumes:
   postgres-data:

@@ -41,13 +41,12 @@ doctor:
 	@docker compose ps postgres 2>/dev/null || echo "WARN: postgres container not running"
 	@echo "--- Valkey ---"
 	@docker compose ps valkey 2>/dev/null || echo "WARN: valkey container not running"
-	@echo "--- NTFY ---"
-	@docker compose ps ntfy 2>/dev/null || echo "WARN: ntfy container not running"
 	@echo "=== Doctor Complete ==="
 
 bootstrap-local:
 	@echo "Creating local dev stack..."
-	docker compose up -d postgres valkey ntfy
+	# ntfy re-added with notifications (Phase 9)
+	docker compose up -d postgres valkey
 	@echo "Run migrations next: cd backend && python manage.py migrate"
 	@echo "Create superuser next: cd backend && python manage.py createsuperuser"
 	@echo "Start backend next: cd backend && python manage.py runserver"
