@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
@@ -24,3 +26,24 @@ class TestThreadBroadcastSignal:
         message = await channel_layer.receive("test-channel")
         assert message["type"] == "thread_update"
         assert message["data"]["status"] == "running"
+
+
+class _BrokenChannelLayer:
+    def group_send(self, *args, **kwargs):
+        raise ConnectionError("broker is down")
+
+
+@pytest.mark.django_db
+def test_broadcast_failure_does_not_propagate():
+    account = Account.objects.create(
+        provider="anthropic", label="s", auth_type="oauth", credential_type="token"
+    )
+    thread = Thread.objects.create(name="resilient-thread", runtime="claude_code", account=account)
+    with patch(
+        "apps.threads.signals.get_channel_layer",
+        return_value=_BrokenChannelLayer(),
+    ):
+        thread.status = Thread.StatusChoices.RUNNING
+        thread.save()
+    thread.refresh_from_db()
+    assert thread.status == Thread.StatusChoices.RUNNING
