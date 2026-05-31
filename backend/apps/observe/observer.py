@@ -1,3 +1,5 @@
+import os
+
 from channels.db import database_sync_to_async
 
 from apps.observe.parser import extract_session_meta, parse_line
@@ -6,6 +8,25 @@ from apps.observe.service import (
     get_or_create_observed_thread,
     record_turn,
 )
+
+
+def select_session_files(file_infos, *, projects, active_minutes, now_ts):
+    """file_infos: list of (path:str, mtime:float). Returns the filtered list of paths.
+
+    - projects: list of lowercase substrings; if non-empty, keep a file only when one of them is a
+      substring of its PARENT-DIR name (the project slug), case-insensitive. Empty list => keep all.
+    - active_minutes: if > 0, keep only files with (now_ts - mtime) <= active_minutes*60. 0 => keep all.
+    """
+    selected = []
+    for path, mtime in file_infos:
+        if projects:
+            slug = os.path.basename(os.path.dirname(path)).lower()
+            if not any(sub in slug for sub in projects):
+                continue
+        if active_minutes > 0 and (now_ts - mtime) > active_minutes * 60:
+            continue
+        selected.append(path)
+    return selected
 
 
 def read_new_lines(path, offset) -> tuple[list[str], int]:

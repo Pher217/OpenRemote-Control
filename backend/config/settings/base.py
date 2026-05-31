@@ -148,6 +148,10 @@ TELEGRAM_USER_LABEL = os.environ.get("TELEGRAM_USER_LABEL", "You")
 TELEGRAM_ASSISTANT_LABEL = os.environ.get("TELEGRAM_ASSISTANT_LABEL", "Claude")
 
 OBSERVE_CLAUDE_PROJECTS_DIR = os.environ.get("OBSERVE_CLAUDE_PROJECTS_DIR", "")
+OBSERVE_PROJECTS = [
+    s for s in os.environ.get("OBSERVE_PROJECTS", "").replace(" ", "").split(",") if s
+]
+OBSERVE_ACTIVE_MINUTES = int(os.environ.get("OBSERVE_ACTIVE_MINUTES", "0") or "0")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

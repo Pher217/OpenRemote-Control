@@ -3,10 +3,58 @@ import json
 import pytest
 from channels.db import database_sync_to_async
 
-from apps.observe.observer import process_lines
+from apps.observe.observer import process_lines, select_session_files
 from apps.observe.parser import extract_session_meta, parse_line, scan_file_meta
 from apps.observe.service import get_or_create_observed_thread
 from apps.threads.models import Message, Thread
+
+NOW = 1_000_000.0
+
+
+def _info(slug, name, age_seconds):
+    return (f"C:/x/projects/{slug}/{name}.jsonl", NOW - age_seconds)
+
+
+def test_select_no_filters_returns_all():
+    infos = [
+        _info("c--Users-philh-dev-openerp", "a", 30),
+        _info("c--Users-philh-dev-other", "b", 99999),
+    ]
+    result = select_session_files(infos, projects=[], active_minutes=0, now_ts=NOW)
+    assert result == [infos[0][0], infos[1][0]]
+
+
+def test_select_projects_substring_case_insensitive():
+    infos = [
+        _info("c--Users-philh-dev-OpenERP", "a", 30),
+        _info("c--Users-philh-dev-agent-command-center", "b", 30),
+        _info("c--Users-philh-dev-unrelated", "c", 30),
+    ]
+    result = select_session_files(
+        infos, projects=["openerp", "agent-command"], active_minutes=0, now_ts=NOW
+    )
+    assert result == [infos[0][0], infos[1][0]]
+
+
+def test_select_active_minutes_drops_stale():
+    infos = [
+        _info("c--Users-philh-dev-openerp", "fresh", 300),
+        _info("c--Users-philh-dev-openerp", "stale", 1200),
+    ]
+    result = select_session_files(infos, projects=[], active_minutes=10, now_ts=NOW)
+    assert result == [infos[0][0]]
+
+
+def test_select_projects_and_recency_combine():
+    infos = [
+        _info("c--Users-philh-dev-openerp", "fresh-match", 60),
+        _info("c--Users-philh-dev-openerp", "stale-match", 1200),
+        _info("c--Users-philh-dev-other", "fresh-nomatch", 60),
+    ]
+    result = select_session_files(
+        infos, projects=["openerp"], active_minutes=10, now_ts=NOW
+    )
+    assert result == [infos[0][0]]
 
 
 def test_extract_text_only_blocks():

@@ -1,10 +1,16 @@
 import asyncio
+import os
+import time
 from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from apps.observe.observer import process_lines, read_new_lines
+from apps.observe.observer import (
+    process_lines,
+    read_new_lines,
+    select_session_files,
+)
 
 
 class Command(BaseCommand):
@@ -26,8 +32,14 @@ class Command(BaseCommand):
                 "observer: stdout mode (set TELEGRAM_FORUM_CHAT_ID to stream to Telegram)"
             )
 
+        projects = [s.lower() for s in settings.OBSERVE_PROJECTS]
+        active_minutes = settings.OBSERVE_ACTIVE_MINUTES
+        projects_label = ", ".join(projects) if projects else "all"
+        active_label = f"{active_minutes}" if active_minutes > 0 else "any"
+
         offsets: dict[Path, int] = {}
         seen: set = set()
+        last_selected_count = None
 
         async def on_turn(thread, p, msg):
             if forum_chat_id:
@@ -45,7 +57,22 @@ class Command(BaseCommand):
 
         while True:
             try:
-                for path in projects_dir.glob("**/*.jsonl"):
+                all_paths = list(projects_dir.glob("**/*.jsonl"))
+                file_infos = [(str(p), os.path.getmtime(p)) for p in all_paths]
+                selected = select_session_files(
+                    file_infos,
+                    projects=projects,
+                    active_minutes=active_minutes,
+                    now_ts=time.time(),
+                )
+                if len(selected) != last_selected_count:
+                    self.stdout.write(
+                        f"observer: following {len(selected)} of {len(all_paths)} sessions "
+                        f"(projects={projects_label}, active<={active_label}min)"
+                    )
+                    last_selected_count = len(selected)
+
+                for path in (Path(s) for s in selected):
                     if path not in offsets:
                         # Seed new files at their current end so only NEW turns stream.
                         offsets[path] = path.stat().st_size
