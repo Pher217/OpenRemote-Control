@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "apps.skills",
     "apps.slash",
     "apps.telegram",
+    "apps.matrix",
     "apps.observe",
     "apps.prompts",
     "apps.connectors",
@@ -167,6 +168,18 @@ ORC_CONNECTOR_TOKEN = os.environ.get("ORC_CONNECTOR_TOKEN", "")
 ORC_PROMPT_CHAT_ID = os.environ.get("ORC_PROMPT_CHAT_ID") or os.environ.get(
     "TELEGRAM_FORUM_CHAT_ID", ""
 )
+
+# Matrix surface (apps.matrix). Bot connects via long-poll sync; no inbound URL.
+# Approvers must be exact, real (non-puppet) MXIDs — never add a bridge puppet MXID.
+MATRIX_HOMESERVER = os.environ.get("MATRIX_HOMESERVER", "")
+MATRIX_USER_ID = os.environ.get("MATRIX_USER_ID", "")
+MATRIX_ACCESS_TOKEN = os.environ.get("MATRIX_ACCESS_TOKEN", "")
+MATRIX_APPROVED_MXIDS = [
+    x.strip() for x in os.environ.get("MATRIX_APPROVED_MXIDS", "").split(",") if x.strip()
+]
+MATRIX_ALLOWED_ROOMS = [
+    x.strip() for x in os.environ.get("MATRIX_ALLOWED_ROOMS", "").split(",") if x.strip()
+]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
