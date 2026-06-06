@@ -1,4 +1,5 @@
 import json
+import os
 
 from apps.observe.runtimes import register_runtime_adapter
 
@@ -6,6 +7,9 @@ from apps.observe.runtimes import register_runtime_adapter
 @register_runtime_adapter
 class ClaudeCodeAdapter:
     provider = "claude_code"
+    default_root_env = "OBSERVE_CLAUDE_PROJECTS_DIR"
+    default_root = os.path.expanduser("~/.claude/projects")
+    discovery_glob = "**/*.jsonl"
 
     def extract_text(self, content) -> str:
         if isinstance(content, str):

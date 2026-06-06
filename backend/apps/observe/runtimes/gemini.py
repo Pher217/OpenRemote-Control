@@ -1,4 +1,5 @@
 import json
+import os
 
 from apps.observe.runtimes import register_runtime_adapter
 
@@ -18,6 +19,9 @@ from apps.observe.runtimes import register_runtime_adapter
 @register_runtime_adapter
 class GeminiAdapter:
     provider = "gemini"
+    default_root_env = "OBSERVE_GEMINI_TMP_DIR"
+    default_root = os.path.expanduser("~/.gemini/tmp")
+    discovery_glob = "**/chats/*.jsonl"
 
     def _extract_text(self, record: dict) -> str:
         """Pull text out of a Gemini JSONL record defensively.

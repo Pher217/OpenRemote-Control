@@ -1,4 +1,5 @@
 import json
+import os
 
 from apps.observe.runtimes import register_runtime_adapter
 
@@ -10,6 +11,9 @@ _CONVERSATIONAL_EVENTS = _USER_EVENTS | _ASSISTANT_EVENTS
 @register_runtime_adapter
 class CodexAdapter:
     provider = "codex"
+    default_root_env = "OBSERVE_CODEX_SESSIONS_DIR"
+    default_root = os.path.expanduser("~/.codex/sessions")
+    discovery_glob = "**/*.jsonl"
 
     def parse_turn(self, raw: str) -> dict | None:
         try:
