@@ -12,4 +12,5 @@ urlpatterns = [
     path("api/audit/", include("apps.audit.urls", namespace="audit")),
     path("api/skills/", include("apps.skills.urls", namespace="skills")),
     path("api/connectors/", include("apps.connectors.urls", namespace="connectors")),
+    path("api/hostlink/", include("apps.hostlink.urls", namespace="hostlink")),
 ]
