@@ -27,6 +27,9 @@ dev = [
 unix = ["ptyprocess>=0.7"]
 windows = ["pywinpty>=2.0"]
 
+[project.scripts]
+orc-host = "agent_host.cli:main"
+
 [build-system]
 requires = ["hatchling>=1.20"]
 build-backend = "hatchling.build"
