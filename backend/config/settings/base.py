@@ -45,6 +45,7 @@ INSTALLED_APPS = [
     "apps.observe",
     "apps.prompts",
     "apps.connectors",
+    "apps.hostlink",
 ]
 
 MIDDLEWARE = [
@@ -168,6 +169,11 @@ ORC_CONNECTOR_TOKEN = os.environ.get("ORC_CONNECTOR_TOKEN", "")
 ORC_PROMPT_CHAT_ID = os.environ.get("ORC_PROMPT_CHAT_ID") or os.environ.get(
     "TELEGRAM_FORUM_CHAT_ID", ""
 )
+# Matrix room a connector Prompt is also delivered to (numbered text; reply resolves it).
+ORC_PROMPT_MATRIX_ROOM = os.environ.get("ORC_PROMPT_MATRIX_ROOM", "")
+# Multi-host (apps.hostlink): pre-shared one-time enrollment secret a host daemon
+# presents once to receive a per-host token.
+ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
 
 # Matrix surface (apps.matrix). Bot connects via long-poll sync; no inbound URL.
 # Approvers must be exact, real (non-puppet) MXIDs — never add a bridge puppet MXID.
