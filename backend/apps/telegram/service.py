@@ -2,6 +2,8 @@ from channels.db import database_sync_to_async
 from django.conf import settings
 
 from apps.accounts.models import Account
+from apps.prompts.service import resolve as resolve_prompt
+from apps.prompts.surfaces.telegram import parse_callback
 from apps.telegram.models import TelegramChat
 from apps.threads.dispatch import dispatch_text
 from apps.threads.models import Thread
@@ -63,3 +65,30 @@ async def handle_update(chat_id: int, text: str, *, send):
 
     if reply:
         await send(chat_id, reply)
+
+
+async def handle_callback_query(
+    callback_query_id: str,
+    from_user_id: int,
+    data: str,
+    *,
+    answer,
+) -> None:
+    if from_user_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
+        await answer(callback_query_id, text="Not authorised.")
+        return
+
+    parsed = parse_callback(data)
+    if parsed is None:
+        await answer(callback_query_id, text="Unknown callback.")
+        return
+
+    nonce, key = parsed
+
+    _resolve = database_sync_to_async(resolve_prompt)
+    prompt = await _resolve(nonce, option_keys=[key], by=str(from_user_id))
+
+    if prompt is None:
+        await answer(callback_query_id, text="Expired or already answered.")
+    else:
+        await answer(callback_query_id, text="Recorded ✔")

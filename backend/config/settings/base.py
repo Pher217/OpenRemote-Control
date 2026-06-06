@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "apps.slash",
     "apps.telegram",
     "apps.observe",
+    "apps.prompts",
 ]
 
 MIDDLEWARE = [
@@ -152,6 +153,12 @@ OBSERVE_PROJECTS = [
     s for s in os.environ.get("OBSERVE_PROJECTS", "").replace(" ", "").split(",") if s
 ]
 OBSERVE_ACTIVE_MINUTES = int(os.environ.get("OBSERVE_ACTIVE_MINUTES", "0") or "0")
+OBSERVER_RUNTIME = os.environ.get("OBSERVER_RUNTIME", "claude_code")
+# Comma-separated list of runtimes to observe concurrently. Empty => fall back to
+# OBSERVER_RUNTIME (single, legacy). Each runtime resolves its own scan root/glob.
+OBSERVE_RUNTIMES = [
+    s for s in os.environ.get("OBSERVE_RUNTIMES", "").replace(" ", "").split(",") if s
+]
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

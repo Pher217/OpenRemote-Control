@@ -4,8 +4,13 @@ import logging
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from apps.telegram.service import handle_update
-from apps.telegram.telegram_api import get_updates, redact_token, send_message
+from apps.telegram.service import handle_callback_query, handle_update
+from apps.telegram.telegram_api import (
+    answer_callback_query,
+    get_updates,
+    redact_token,
+    send_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,16 @@ class Command(BaseCommand):
             for update in updates:
                 offset = update["update_id"] + 1
                 try:
+                    if "callback_query" in update:
+                        cq = update["callback_query"]
+                        await handle_callback_query(
+                            cq["id"],
+                            cq["from"]["id"],
+                            cq.get("data", ""),
+                            answer=answer_callback_query,
+                        )
+                        continue
+
                     message = update.get("message")
                     if not message or "text" not in message:
                         continue
