@@ -41,15 +41,41 @@ async def edit_forum_topic(chat_id, message_thread_id, name) -> None:
         resp.raise_for_status()
 
 
-async def send_message(chat_id, text, message_thread_id=None, parse_mode=None) -> None:
+async def send_message(
+    chat_id,
+    text,
+    message_thread_id=None,
+    parse_mode=None,
+    reply_markup=None,
+) -> None:
     payload = {"chat_id": chat_id, "text": text}
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         resp = await client.post(
             f"{_base_url()}/sendMessage",
+            json=payload,
+        )
+        resp.raise_for_status()
+
+
+async def answer_callback_query(
+    callback_query_id: str,
+    text: str = "",
+    show_alert: bool = False,
+) -> None:
+    payload: dict = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    if show_alert:
+        payload["show_alert"] = True
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/answerCallbackQuery",
             json=payload,
         )
         resp.raise_for_status()
