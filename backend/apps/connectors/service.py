@@ -78,6 +78,27 @@ def _next_sequence(thread: Thread) -> int:
     return nxt
 
 
+def _broadcast_text(text: str) -> None:
+    """Send a plain-text message to every configured surface (best-effort)."""
+    chat_id_str = getattr(settings, "ORC_PROMPT_CHAT_ID", "")
+    if chat_id_str:
+        try:
+            from apps.telegram.telegram_api import send_message
+
+            async_to_sync(send_message)(int(chat_id_str), text)
+        except Exception:
+            logger.exception("connector broadcast: telegram delivery failed (best-effort)")
+
+    matrix_room = getattr(settings, "ORC_PROMPT_MATRIX_ROOM", "")
+    if matrix_room:
+        try:
+            from apps.matrix.client import send_text
+
+            async_to_sync(send_text)(matrix_room, text)
+        except Exception:
+            logger.exception("connector broadcast: matrix delivery failed (best-effort)")
+
+
 def notify(
     connector_id: str,
     tool: str,
@@ -93,14 +114,7 @@ def notify(
         sequence=_next_sequence(thread),
     )
 
-    chat_id_str = getattr(settings, "ORC_PROMPT_CHAT_ID", "")
-    if chat_id_str:
-        try:
-            from apps.telegram.telegram_api import send_message
-
-            async_to_sync(send_message)(int(chat_id_str), message)
-        except Exception:
-            logger.exception("connector notify: telegram delivery failed (best-effort)")
+    _broadcast_text(message)
 
 
 def ask(
@@ -197,23 +211,31 @@ def result(nonce: str) -> dict:
 
 
 def _deliver(prompt: Prompt) -> None:
-    """Best-effort Telegram delivery of a prompt. Never raises."""
+    """Best-effort multi-surface delivery of a prompt. Never raises."""
     chat_id_str = getattr(settings, "ORC_PROMPT_CHAT_ID", "")
-    if not chat_id_str:
-        return
+    if chat_id_str:
+        try:
+            from apps.telegram.telegram_api import send_message
 
-    try:
-        from apps.telegram.telegram_api import send_message
+            reply_markup = build_reply_markup(prompt)
+            text = prompt.question
+            if prompt.body:
+                text = f"{text}\n\n{prompt.body}"
 
-        reply_markup = build_reply_markup(prompt)
-        text = prompt.question
-        if prompt.body:
-            text = f"{text}\n\n{prompt.body}"
+            async_to_sync(send_message)(
+                int(chat_id_str),
+                text,
+                reply_markup=reply_markup,
+            )
+        except Exception:
+            logger.exception("connector deliver: telegram delivery failed (best-effort)")
 
-        async_to_sync(send_message)(
-            int(chat_id_str),
-            text,
-            reply_markup=reply_markup,
-        )
-    except Exception:
-        logger.exception("connector deliver: telegram delivery failed (best-effort)")
+    matrix_room = getattr(settings, "ORC_PROMPT_MATRIX_ROOM", "")
+    if matrix_room:
+        try:
+            from apps.matrix.client import send_text
+            from apps.matrix.render import render_prompt
+
+            async_to_sync(send_text)(matrix_room, render_prompt(prompt))
+        except Exception:
+            logger.exception("connector deliver: matrix delivery failed (best-effort)")
