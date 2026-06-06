@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "apps.slash",
     "apps.telegram",
     "apps.observe",
+    "apps.prompts",
 ]
 
 MIDDLEWARE = [
