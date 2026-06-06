@@ -11,4 +11,5 @@ urlpatterns = [
     path("api/approvals/", include("apps.approvals.urls", namespace="approvals")),
     path("api/audit/", include("apps.audit.urls", namespace="audit")),
     path("api/skills/", include("apps.skills.urls", namespace="skills")),
+    path("api/connectors/", include("apps.connectors.urls", namespace="connectors")),
 ]

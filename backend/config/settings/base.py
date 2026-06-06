@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     "apps.telegram",
     "apps.observe",
     "apps.prompts",
+    "apps.connectors",
 ]
 
 MIDDLEWARE = [
@@ -159,6 +160,13 @@ OBSERVER_RUNTIME = os.environ.get("OBSERVER_RUNTIME", "claude_code")
 OBSERVE_RUNTIMES = [
     s for s in os.environ.get("OBSERVE_RUNTIMES", "").replace(" ", "").split(",") if s
 ]
+
+# Universal MCP connector bridge (apps.connectors): shared bearer token a connector
+# must present, and the chat id where connector Prompts (ask/approve) are delivered.
+ORC_CONNECTOR_TOKEN = os.environ.get("ORC_CONNECTOR_TOKEN", "")
+ORC_PROMPT_CHAT_ID = os.environ.get("ORC_PROMPT_CHAT_ID") or os.environ.get(
+    "TELEGRAM_FORUM_CHAT_ID", ""
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
