@@ -1,8 +1,9 @@
 import os
 
 from channels.db import database_sync_to_async
+from django.conf import settings
 
-from apps.observe.parser import extract_session_meta, parse_line
+from apps.observe.runtimes import get_runtime_adapter
 from apps.observe.service import (
     apply_session_meta,
     get_or_create_observed_thread,
@@ -44,23 +45,25 @@ def read_new_lines(path, offset) -> tuple[list[str], int]:
     return lines, new_offset
 
 
-async def process_lines(lines, jsonl_path, *, on_turn, seen=None):
+async def process_lines(lines, jsonl_path, *, on_turn, seen=None, provider=None):
     if seen is None:
         seen = set()
+    runtime = provider or settings.OBSERVER_RUNTIME
+    adapter = get_runtime_adapter(runtime)
     for raw in lines:
-        meta = extract_session_meta(raw)
+        meta = adapter.extract_session_meta(raw)
         meta_session = meta.pop("session_id", None)
         if meta and meta_session:
             thread = await database_sync_to_async(get_or_create_observed_thread)(
-                meta_session, jsonl_path
+                meta_session, jsonl_path, runtime
             )
             await database_sync_to_async(apply_session_meta)(thread, meta)
 
-        p = parse_line(raw)
+        p = adapter.parse_turn(raw)
         if p is None or p["uuid"] in seen:
             continue
         thread = await database_sync_to_async(get_or_create_observed_thread)(
-            p["session_id"], jsonl_path
+            p["session_id"], jsonl_path, runtime
         )
         msg = await record_turn(thread, p["role"], p["text"])
         seen.add(p["uuid"])

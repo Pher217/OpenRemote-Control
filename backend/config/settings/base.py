@@ -152,6 +152,7 @@ OBSERVE_PROJECTS = [
     s for s in os.environ.get("OBSERVE_PROJECTS", "").replace(" ", "").split(",") if s
 ]
 OBSERVE_ACTIVE_MINUTES = int(os.environ.get("OBSERVE_ACTIVE_MINUTES", "0") or "0")
+OBSERVER_RUNTIME = os.environ.get("OBSERVER_RUNTIME", "claude_code")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
