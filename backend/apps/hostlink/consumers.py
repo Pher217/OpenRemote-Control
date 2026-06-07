@@ -1,4 +1,5 @@
 import time
+from pathlib import Path
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -7,7 +8,12 @@ from django.core.cache import cache
 from apps.hostlink import security
 from apps.hostlink.models import HostToken
 from apps.hosts.models import Host
-from apps.observe.service import get_or_create_observed_thread, record_turn
+from apps.observe.runtimes import UnknownRuntimeError, get_runtime_adapter
+from apps.observe.service import (
+    apply_session_meta,
+    get_or_create_observed_thread,
+    record_turn,
+)
 
 
 class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
@@ -72,6 +78,9 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         self.host = host
         self.group_name = f"host_{host.id}"
+        # Per-file remembered session id, for runtimes whose turn lines carry no
+        # session id of their own (Codex/Gemini) — mirrors the observer's file_state.
+        self._file_sessions: dict[str, str] = {}
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
@@ -82,8 +91,11 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
     async def receive_json(self, content):
         if not isinstance(content, dict):
             return
-        if content.get("type") == "session.event":
+        msg_type = content.get("type")
+        if msg_type == "session.event":
             await self._handle_session_event(content.get("data", {}))
+        elif msg_type == "session.line":
+            await self._handle_session_line(content.get("data", {}))
         # Unknown message types are silently ignored.
 
     async def _handle_session_event(self, data: dict):
@@ -107,6 +119,50 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         if role and text:
             await record_turn(thread, role, text)
+
+    async def _handle_session_line(self, data: dict):
+        """Persist a single raw transcript line, parsed server-side.
+
+        The daemon stays dumb and ships {provider, jsonl_path, raw}; the backend's
+        own per-runtime parsers (the single source of truth) turn it into a turn.
+        Session id is taken from the line, else a per-file remembered header id,
+        else the file stem — so Codex/Gemini turns (no per-line id) attach to one
+        thread per file. The host is always stamped server-side.
+        """
+        provider = data.get("provider", "")
+        jsonl_path = data.get("jsonl_path", "")
+        raw = data.get("raw", "")
+        if not provider or not raw:
+            return
+        try:
+            adapter = get_runtime_adapter(provider)
+        except UnknownRuntimeError:
+            return
+
+        meta = adapter.extract_session_meta(raw)
+        meta_session = meta.pop("session_id", None)
+        if meta_session:
+            self._file_sessions[jsonl_path] = meta_session
+
+        parsed = adapter.parse_turn(raw)
+        session_ref = (
+            (parsed.get("session_id") if parsed else None)
+            or self._file_sessions.get(jsonl_path)
+            or (Path(jsonl_path).stem if jsonl_path else None)
+        )
+        if not session_ref:
+            return
+
+        thread = await database_sync_to_async(get_or_create_observed_thread)(
+            session_ref, jsonl_path, provider
+        )
+        if thread.host_id != self.host.id:
+            thread.host = self.host
+            await database_sync_to_async(thread.save)(update_fields=["host"])
+        if meta:
+            await database_sync_to_async(apply_session_meta)(thread, meta)
+        if parsed:
+            await record_turn(thread, parsed["role"], parsed["text"])
 
     # Group handler for future downstream commands sent via channel_layer.group_send.
     async def host_command(self, event):
