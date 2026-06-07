@@ -1,3 +1,4 @@
+import logging
 import time
 from pathlib import Path
 
@@ -9,12 +10,16 @@ from django.core.cache import cache
 from apps.hostlink import security
 from apps.hostlink.models import HostToken
 from apps.hosts.models import Host
+from apps.observe.delivery import deliver_turn
 from apps.observe.runtimes import UnknownRuntimeError, get_runtime_adapter
 from apps.observe.service import (
     apply_session_meta,
     get_or_create_observed_thread,
     record_turn,
 )
+from apps.telegram.telegram_api import redact_token
+
+logger = logging.getLogger(__name__)
 
 
 class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
@@ -173,22 +178,25 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         """Forward an observed turn from a remote host to the Telegram forum.
 
         Mirrors the local run_session_observer delivery path so multi-host
-        sessions surface in the same inbox. Best-effort: delivery failures must
-        never break transcript ingestion.
+        sessions surface in the same inbox. Uses TELEGRAM_FORUM_CHAT_ID (the
+        same setting the observer uses) so both paths route to one forum.
+        Best-effort: delivery failures must never break transcript ingestion.
+
+        Note: do NOT run run_session_observer on the same machine that connects
+        a host daemon for the same sessions — both paths would deliver every
+        turn, posting each twice.
         """
-        forum_chat_id = getattr(settings, "ORC_PROMPT_CHAT_ID", "") or getattr(
-            settings, "TELEGRAM_FORUM_CHAT_ID", ""
-        )
+        forum_chat_id = getattr(settings, "TELEGRAM_FORUM_CHAT_ID", "")
         if not forum_chat_id:
             return
-        from apps.observe.delivery import deliver_turn
-
         try:
             await deliver_turn(
                 thread, parsed, None, forum_chat_id=int(forum_chat_id)
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 — best-effort, never break ingestion
+            logger.warning(
+                "hostlink: telegram delivery failed: %s", redact_token(str(exc))
+            )
 
     # Group handler for future downstream commands sent via channel_layer.group_send.
     async def host_command(self, event):

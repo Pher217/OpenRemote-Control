@@ -12,6 +12,7 @@ class _FakeApi:
         self._next_id = 1000
         self.create_calls = []
         self.send_calls = []
+        self.send_kwargs = []
 
     async def create_forum_topic(self, chat_id, name, icon_color):
         self.create_calls.append((chat_id, name, icon_color))
@@ -28,6 +29,13 @@ class _FakeApi:
         disable_notification=None,
     ):
         self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
+        self.send_kwargs.append(
+            {
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_notification": disable_notification,
+            }
+        )
 
 
 @pytest.mark.django_db(transaction=True)
@@ -184,6 +192,27 @@ async def test_topic_name_and_intro_from_meta():
     intros = [c for c in fake.send_calls if "session <code>" in c[1]]
     assert len(intros) == 1
     assert len(fake.send_calls) == 3
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_turn_is_silent_while_intro_notifies():
+    """
+    GIVEN a new observed session
+    WHEN the first turn is delivered
+    THEN the topic-intro message notifies and the turn message is silent.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Ssilent1", "/tmp/silent.jsonl"
+    )
+    turn = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Ssilent1"}
+
+    await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+
+    # First send is the intro (default notification); the turn send is silent.
+    assert fake.send_kwargs[0]["disable_notification"] is None
+    assert fake.send_kwargs[-1]["disable_notification"] is True
 
 
 def test_pick_color_deterministic():
