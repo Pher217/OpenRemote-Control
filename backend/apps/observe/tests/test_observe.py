@@ -17,8 +17,8 @@ def _info(slug, name, age_seconds):
 
 def test_select_no_filters_returns_all():
     infos = [
-        _info("c--Users-philh-dev-openerp", "a", 30),
-        _info("c--Users-philh-dev-other", "b", 99999),
+        _info("c--Users-u-dev-openerp", "a", 30),
+        _info("c--Users-u-dev-other", "b", 99999),
     ]
     result = select_session_files(infos, projects=[], active_minutes=0, now_ts=NOW)
     assert result == [infos[0][0], infos[1][0]]
@@ -26,9 +26,9 @@ def test_select_no_filters_returns_all():
 
 def test_select_projects_substring_case_insensitive():
     infos = [
-        _info("c--Users-philh-dev-OpenERP", "a", 30),
-        _info("c--Users-philh-dev-agent-command-center", "b", 30),
-        _info("c--Users-philh-dev-unrelated", "c", 30),
+        _info("c--Users-u-dev-OpenERP", "a", 30),
+        _info("c--Users-u-dev-agent-command-center", "b", 30),
+        _info("c--Users-u-dev-unrelated", "c", 30),
     ]
     result = select_session_files(
         infos, projects=["openerp", "agent-command"], active_minutes=0, now_ts=NOW
@@ -38,8 +38,8 @@ def test_select_projects_substring_case_insensitive():
 
 def test_select_active_minutes_drops_stale():
     infos = [
-        _info("c--Users-philh-dev-openerp", "fresh", 300),
-        _info("c--Users-philh-dev-openerp", "stale", 1200),
+        _info("c--Users-u-dev-openerp", "fresh", 300),
+        _info("c--Users-u-dev-openerp", "stale", 1200),
     ]
     result = select_session_files(infos, projects=[], active_minutes=10, now_ts=NOW)
     assert result == [infos[0][0]]
@@ -47,9 +47,9 @@ def test_select_active_minutes_drops_stale():
 
 def test_select_projects_and_recency_combine():
     infos = [
-        _info("c--Users-philh-dev-openerp", "fresh-match", 60),
-        _info("c--Users-philh-dev-openerp", "stale-match", 1200),
-        _info("c--Users-philh-dev-other", "fresh-nomatch", 60),
+        _info("c--Users-u-dev-openerp", "fresh-match", 60),
+        _info("c--Users-u-dev-openerp", "stale-match", 1200),
+        _info("c--Users-u-dev-other", "fresh-nomatch", 60),
     ]
     result = select_session_files(
         infos, projects=["openerp"], active_minutes=10, now_ts=NOW
@@ -130,7 +130,7 @@ def test_extract_session_meta_from_turn_line():
             "type": "user",
             "uuid": "u1",
             "sessionId": "S1",
-            "cwd": "c:\\Users\\philh\\dev\\agent-command-center",
+            "cwd": "c:\\Users\\u\\dev\\agent-command-center",
             "gitBranch": "claude/2026-05-25-foo",
             "message": {"role": "user", "content": "hi"},
         }

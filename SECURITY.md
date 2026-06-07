@@ -11,11 +11,16 @@ Only the latest minor version within a supported major line receives security pa
 
 ## Reporting a Vulnerability
 
-**Please do not open public issues for security vulnerabilities.**
+**Please do not disclose security vulnerabilities in public issues, pull requests, or discussions.**
 
-Email: `security@pher217.dev` (PGP key available on [OpenPGP key servers](https://keys.openpgp.org)).
+Report privately using **GitHub's private vulnerability reporting**:
 
-If you do not receive an acknowledgment within **48 hours**, or if the issue is critical and you believe we may have missed it, follow up with a second email and prefix the subject line with `[URGENT]`.
+1. Go to the [Security tab](https://github.com/Pher217/OpenRemote-Control/security) of this repository.
+2. Click **Report a vulnerability** to open a private security advisory visible only to the maintainers.
+
+This keeps the report confidential until a fix is released. If private reporting is unavailable to you, open a regular [GitHub issue](https://github.com/Pher217/OpenRemote-Control/issues/new) that says only "requesting a security contact" — **without any vulnerability details** — and a maintainer will follow up.
+
+If you do not receive an acknowledgment within **48 hours**, or the issue is critical, add a comment to your advisory (or follow-up issue) prefixed with `[URGENT]`.
 
 ### What to include
 
@@ -26,9 +31,9 @@ If you do not receive an acknowledgment within **48 hours**, or if the issue is 
 
 ### What NOT to include
 
-- **Never send credentials, API keys, tokens, passwords, or private keys** in the report.
-- If logs or screenshots contain secrets, redact them before sending.
-- If you need to share a reproduction that requires secrets, say so in the report and we will arrange a secure transfer channel.
+- **Never include credentials, API keys, tokens, passwords, or private keys** in the report.
+- If logs or screenshots contain secrets, redact them first.
+- If a reproduction requires secrets, say so in the advisory and we will arrange a secure transfer channel.
 
 ## Response Timeline
 

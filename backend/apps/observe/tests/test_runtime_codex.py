@@ -192,7 +192,7 @@ def test_extract_session_meta_cross_platform_basename():
             "type": "session_meta",
             "payload": {
                 "id": "abc-123",
-                "cwd": r"C:\Users\phil\dev\my-repo",
+                "cwd": r"C:\Users\u\dev\my-repo",
                 "git": {"branch": "main"},
             },
         }
