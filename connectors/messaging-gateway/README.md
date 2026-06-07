@@ -142,6 +142,27 @@ semicolon.
 
 ---
 
+## Easy setup (QR web page)
+
+When the gateway is running it serves a local web page at
+`http://localhost:8088` (or `http://localhost:$SETUP_PORT` if you changed the
+default).  Open that URL in a browser on the machine running the gateway.
+
+**WhatsApp** — the page renders the current QR code as a scannable image.
+Open WhatsApp on your phone → **Settings → Linked Devices → Link a Device**,
+then scan the QR shown in the browser.  The page flips to a Connected status
+once the link is complete.  No more hunting through `docker logs` output.
+
+**Token-based platforms (Slack, Discord, Signal)** — the page shows a
+per-platform config checklist confirming which env vars are set and whether the
+adapter connected successfully.
+
+**Security:** this page can link your personal WhatsApp account.  The compose
+file binds the port to `127.0.0.1` only so it is not reachable from outside the
+host.  Do not expose `SETUP_PORT` via Caddy or any public proxy.
+
+---
+
 ## Environment variables
 
 | Variable | Required | Default | Description |

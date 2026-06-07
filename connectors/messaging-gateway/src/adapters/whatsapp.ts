@@ -4,6 +4,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import qrcodeTerminal from "qrcode-terminal";
 import type { Adapter, InboundHandler } from "./types.js";
+import { setQR, setStatus, clearQR } from "../setup-state.js";
 
 // Baileys v7 rc-series API notes:
 //   - makeWASocket is the default (and named) export.
@@ -49,6 +50,7 @@ export class WhatsAppAdapter implements Adapter {
       if (qr) {
         console.log("[whatsapp] Scan this QR code with WhatsApp → Linked Devices:");
         qrcodeTerminal.generate(qr, { small: true });
+        setQR("whatsapp", qr);
       }
 
       if (connection === "close") {
@@ -63,15 +65,19 @@ export class WhatsAppAdapter implements Adapter {
         );
 
         if (shouldReconnect) {
+          setStatus("whatsapp", "connecting", `code=${statusCode}`);
           void this.connect(onInbound);
         } else {
           console.error(
             "[whatsapp] Logged out. Remove ./data/whatsapp and restart to re-scan QR."
           );
+          setStatus("whatsapp", "error", "Logged out — remove ./data/whatsapp and restart");
           this.sock = null;
         }
       } else if (connection === "open") {
         console.log("[whatsapp] Connected.");
+        setStatus("whatsapp", "linked");
+        clearQR("whatsapp");
       }
     });
 

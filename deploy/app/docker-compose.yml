@@ -107,6 +107,8 @@ services:
     image: orc-messaging-gateway:latest
     restart: unless-stopped
     env_file: ../.env
+    ports:
+      - "127.0.0.1:${SETUP_PORT:-8088}:8088"
     volumes:
       - messaging_gateway_data:/app/data
     depends_on:

@@ -18,7 +18,15 @@ class _FakeTelegramApi:
         self._next_id += 1
         return topic_id
 
-    async def send_message(self, chat_id, text, message_thread_id=None, parse_mode=None):
+    async def send_message(
+        self,
+        chat_id,
+        text,
+        message_thread_id=None,
+        parse_mode=None,
+        reply_markup=None,
+        disable_notification=None,
+    ):
         self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
 
 
