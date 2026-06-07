@@ -1,0 +1,75 @@
+name: PR AI Summary
+
+# Posts an AI-generated summary + risk note as a PR comment, using Ollama Cloud.
+#
+# Privacy note: this sends the PR diff to ollama.com (cloud model). That means
+# code leaves your infrastructure. Intended for the PUBLIC repo / public code.
+# Do not enable while the repo contains anything you would not publish.
+#
+# Setup (one-time): store your Ollama Cloud key as an Actions secret —
+#   gh secret set OLLAMA_API_KEY
+# Get a key at https://ollama.com/settings/keys
+# To also run on Dependabot PRs, add it as a Dependabot secret too:
+#   gh secret set OLLAMA_API_KEY --app dependabot
+
+on:
+  pull_request:
+    # opened/reopened only — one summary per PR, no comment spam on every push.
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to summarize"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  summarize:
+    runs-on: ubuntu-latest
+    # Skip PRs from forks — secrets are not available there, so it can't run anyway.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    env:
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      OLLAMA_MODEL: kimi-k2.6:cloud
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+    steps:
+      - name: Generate and post AI summary
+        run: |
+          set -euo pipefail
+
+          if [ -z "${OLLAMA_API_KEY:-}" ]; then
+            echo "OLLAMA_API_KEY not set (fork PR, Dependabot, or unconfigured) — skipping."
+            exit 0
+          fi
+
+          # Cap diff size to keep token use and latency sane (~15k tokens).
+          DIFF="$(gh pr diff "$PR_NUMBER" --repo "$REPO" | head -c 60000)"
+          if [ -z "$DIFF" ]; then
+            echo "Empty diff — nothing to summarize."
+            exit 0
+          fi
+
+          INSTRUCTIONS="You are a senior code reviewer. Summarize this pull request diff for the maintainer in GitHub-flavored markdown: (1) a one-line TL;DR; (2) 3-6 bullets of what changed, grouped by area; (3) a short risk assessment covering security, breaking changes, and test coverage. Be terse and concrete. Do not invent changes that are not in the diff."
+          CONTENT="$INSTRUCTIONS"$'\n\nDIFF:\n'"$DIFF"
+
+          PAYLOAD=$(jq -n --arg m "$OLLAMA_MODEL" --arg p "$CONTENT" \
+            '{model:$m, messages:[{role:"user", content:$p}], stream:false}')
+
+          RESPONSE=$(curl -fsSL https://ollama.com/api/chat \
+            -H "Authorization: Bearer $OLLAMA_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" | jq -r '.message.content // .error // "(no content returned)"')
+
+          BODY=$(printf '## 🤖 AI PR summary — Ollama Cloud (%s)\n\n%s\n\n<sub>Generated automatically from the diff. Verify before relying on it.</sub>' \
+            "$OLLAMA_MODEL" "$RESPONSE")
+
+          # Edit the bot's previous summary if one exists, else create it.
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --edit-last --body "$BODY" \
+            || gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$BODY"
