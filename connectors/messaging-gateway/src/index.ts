@@ -1,4 +1,6 @@
 import { loadConfig } from "./config.js";
+import { startSetupServer } from "./setup-server.js";
+import { setStatus } from "./setup-state.js";
 import { BackendClient } from "./backend.js";
 import { WhatsAppAdapter } from "./adapters/whatsapp.js";
 import { SlackAdapter } from "./adapters/slack.js";
@@ -11,14 +13,22 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const backend = new BackendClient(config.backendUrl, config.gatewayToken);
 
+  // Start setup page early so it's reachable while adapters are still connecting.
+  const setupServer = startSetupServer(config.setupPort, config.enabledPlatforms);
+  setupServer.on("listening", () => {
+    console.log(`[gateway] Setup page: http://localhost:${config.setupPort}`);
+  });
+
   const adapters: Adapter[] = [];
 
   if (config.enabledPlatforms.has("whatsapp")) {
     adapters.push(new WhatsAppAdapter("./data/whatsapp"));
+    // WhatsApp status is managed via connection events in the adapter itself.
   }
   if (config.enabledPlatforms.has("slack")) {
     if (!config.slackBotToken || !config.slackAppToken) {
       console.warn("[gateway] SLACK_BOT_TOKEN / SLACK_APP_TOKEN not set — skipping Slack.");
+      setStatus("slack", "needs_token", "Set SLACK_BOT_TOKEN and SLACK_APP_TOKEN");
     } else {
       adapters.push(new SlackAdapter(config.slackBotToken, config.slackAppToken));
     }
@@ -26,6 +36,7 @@ async function main(): Promise<void> {
   if (config.enabledPlatforms.has("discord")) {
     if (!config.discordToken) {
       console.warn("[gateway] DISCORD_TOKEN not set — skipping Discord.");
+      setStatus("discord", "needs_token", "Set DISCORD_TOKEN");
     } else {
       adapters.push(new DiscordAdapter(config.discordToken));
     }
@@ -33,6 +44,7 @@ async function main(): Promise<void> {
   if (config.enabledPlatforms.has("signal")) {
     if (!config.signalApiUrl || !config.signalNumber) {
       console.warn("[gateway] SIGNAL_API_URL / SIGNAL_NUMBER not set — skipping Signal.");
+      setStatus("signal", "needs_token", "Set SIGNAL_API_URL and SIGNAL_NUMBER");
     } else {
       adapters.push(new SignalAdapter(config.signalApiUrl, config.signalNumber));
     }
@@ -40,6 +52,7 @@ async function main(): Promise<void> {
   if (config.enabledPlatforms.has("imessage")) {
     if (!config.blueBubblesUrl || !config.blueBubblesPassword) {
       console.warn("[gateway] BLUEBUBBLES_URL / BLUEBUBBLES_PASSWORD not set — skipping iMessage.");
+      setStatus("imessage", "needs_token", "Set BLUEBUBBLES_URL and BLUEBUBBLES_PASSWORD");
     } else {
       adapters.push(
         new IMessageAdapter(config.blueBubblesUrl, config.blueBubblesPassword, config.iMessageWebhookPort)
@@ -71,8 +84,13 @@ async function main(): Promise<void> {
     try {
       await adapter.start(makeInboundHandler(adapter));
       console.log(`[gateway] ${adapter.platform} adapter started.`);
+      // WhatsApp manages its own status via connection events; mark others linked here.
+      if (adapter.platform !== "whatsapp") {
+        setStatus(adapter.platform, "linked");
+      }
     } catch (err) {
       console.error(`[gateway] Failed to start ${adapter.platform} adapter:`, err);
+      setStatus(adapter.platform, "error", String(err));
     }
   }
 

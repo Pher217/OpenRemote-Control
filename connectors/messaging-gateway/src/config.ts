@@ -3,6 +3,7 @@ export interface Config {
   gatewayToken: string;
   enabledPlatforms: Set<string>;
   pollIntervalMs: number;
+  setupPort: number;
   slackBotToken: string;
   slackAppToken: string;
   discordToken: string;
@@ -36,12 +37,14 @@ export function loadConfig(): Config {
   );
 
   const pollIntervalMs = parseInt(optionalEnv("POLL_INTERVAL_MS", "5000"), 10);
+  const setupPort = parseInt(optionalEnv("SETUP_PORT", "8088"), 10);
 
   return {
     backendUrl,
     gatewayToken,
     enabledPlatforms,
     pollIntervalMs,
+    setupPort,
     slackBotToken: optionalEnv("SLACK_BOT_TOKEN"),
     slackAppToken: optionalEnv("SLACK_APP_TOKEN"),
     discordToken: optionalEnv("DISCORD_TOKEN"),
