@@ -1,6 +1,7 @@
 from channels.db import database_sync_to_async
 from django.conf import settings
 
+from apps.messaging import routing
 from apps.observe.formatting import _esc, format_turn
 from apps.telegram import telegram_api
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
@@ -84,3 +85,34 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
             message_thread_id=topic_id,
             disable_notification=True,
         )
+
+
+async def deliver_turn_active(thread, parsed, msg, *, api=None) -> None:
+    """Deliver a turn to whichever messaging platform is currently active.
+
+    Returns immediately (no-op) when no recipient is configured.
+    Gateway platforms receive a plain-text message prefixed with a session label.
+    Never raises — all exceptions are swallowed.
+    """
+    recipient = routing.active_recipient()
+    if not recipient:
+        return
+
+    try:
+        if routing.is_telegram():
+            await deliver_turn(thread, parsed, msg, forum_chat_id=int(recipient), api=api)
+        else:
+            label = _topic_name(thread)
+            role = parsed["role"]
+            role_label = (
+                settings.TELEGRAM_USER_LABEL
+                if role == "user"
+                else settings.TELEGRAM_ASSISTANT_LABEL
+            )
+            text = f"[{label}] {role_label}: {parsed['text'][:3900]}"
+            platform = routing.active_platform()
+            from apps.gateway.service import enqueue_text  # noqa: PLC0415
+
+            await database_sync_to_async(enqueue_text)(platform, recipient, text)
+    except Exception:  # noqa: BLE001
+        pass

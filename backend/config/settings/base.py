@@ -177,6 +177,11 @@ ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
 # Empty => the pairing payload degrades to just the code (manual --backend still works).
 ORC_PUBLIC_BASE_URL = os.environ.get("ORC_PUBLIC_BASE_URL", "")
 
+# The single messaging app of choice. ORC is a single-platform aggregator: every
+# session and prompt the operator follows flows to ONE app. One of:
+# telegram | whatsapp | slack | signal | imessage | discord. Defaults to telegram.
+ORC_MESSAGING_PLATFORM = (os.environ.get("ORC_MESSAGING_PLATFORM") or "telegram").strip().lower()
+
 # Messaging gateway (apps.gateway). Node sidecar delivers to WhatsApp/Slack/Discord/Signal/iMessage.
 MESSAGING_GATEWAY_TOKEN = os.environ.get("MESSAGING_GATEWAY_TOKEN", "")
 ORC_PROMPT_WHATSAPP = os.environ.get("ORC_PROMPT_WHATSAPP", "")

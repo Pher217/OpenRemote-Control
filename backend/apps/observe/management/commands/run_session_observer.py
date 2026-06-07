@@ -40,12 +40,16 @@ class Command(BaseCommand):
         runtimes = _resolve_runtimes()
         self.stdout.write(f"Observing runtimes: {', '.join(runtimes)}")
 
-        forum_chat_id = getattr(settings, "TELEGRAM_FORUM_CHAT_ID", "")
-        if forum_chat_id:
-            self.stdout.write(f"observer: streaming to Telegram forum {forum_chat_id}")
+        from apps.messaging import routing
+
+        active_recipient = routing.active_recipient()
+        if active_recipient:
+            self.stdout.write(
+                f"observer: streaming to {routing.active_platform()} ({active_recipient})"
+            )
         else:
             self.stdout.write(
-                "observer: stdout mode (set TELEGRAM_FORUM_CHAT_ID to stream to Telegram)"
+                "observer: stdout mode (configure ORC_MESSAGING_PLATFORM and recipient to stream)"
             )
 
         projects = [s.lower() for s in settings.OBSERVE_PROJECTS]
@@ -63,16 +67,10 @@ class Command(BaseCommand):
         last_selected: dict[str, int | None] = dict.fromkeys(runtimes)
 
         async def on_turn(thread, p, msg):
-            if forum_chat_id:
-                from apps.observe.delivery import deliver_turn
-                from apps.telegram.telegram_api import redact_token
+            if routing.active_recipient():
+                from apps.observe.delivery import deliver_turn_active
 
-                try:
-                    await deliver_turn(
-                        thread, p, msg, forum_chat_id=int(forum_chat_id)
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    self.stderr.write(f"observer deliver error: {redact_token(str(exc))}")
+                await deliver_turn_active(thread, p, msg)
             else:
                 sid = p.get("session_id") or "?"
                 self.stdout.write(
