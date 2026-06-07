@@ -189,7 +189,34 @@ messages to `/api/gateway/inbound`.  It authenticates with `MESSAGING_GATEWAY_TO
 Only platforms listed in `ENABLED_PLATFORMS` are started; the gateway logs a
 skip message for disabled platforms.
 
-### 5a. WhatsApp (Baileys — unofficial multi-device protocol)
+### 5a. Easy-setup web page
+
+Once the gateway is running, open **http://localhost:8088** (or
+`http://localhost:$SETUP_PORT`) in a browser **on the server** (or tunnel it
+to your laptop with `ssh -L 8088:localhost:8088 <server>`).
+
+The page lets you connect each platform without touching the terminal:
+
+- **WhatsApp** — the QR code is rendered as a scannable image.  Scan it with
+  **WhatsApp → Settings → Linked Devices → Link a Device**.  The page flips to
+  Connected when the link succeeds — no more squinting at ASCII art in logs.
+- **Token-based platforms (Slack, Discord, Signal)** — a config checklist
+  shows which env vars are present and whether the adapter is live.
+
+Previously the only option was:
+
+```bash
+docker compose -f deploy/app/docker-compose.yml logs -f messaging-gateway
+```
+
+…and scanning a small ASCII QR from a terminal window.  The web page is
+strictly better for WhatsApp first-time setup.
+
+**Security:** the compose file maps `SETUP_PORT` to `127.0.0.1` only — it is
+not reachable from the internet.  Never add `SETUP_PORT` to your Caddy config
+or expose it on a public interface.  Treat it as a local operator tool only.
+
+### 5b. WhatsApp (Baileys — unofficial multi-device protocol)
 
 > **Risk notice:** Baileys uses the WhatsApp Web multi-device protocol, which is
 > not the official Cloud API.  Account bans are possible (rare in practice for
@@ -218,7 +245,7 @@ Set the prompt recipient in `.env`:
 ORC_PROMPT_WHATSAPP=+41791234567   # international format
 ```
 
-### 5b. Slack (Socket Mode bot)
+### 5c. Slack (Socket Mode bot)
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App →
    **From scratch**.
@@ -249,7 +276,7 @@ Restart the gateway after updating `.env`:
 docker compose -f deploy/app/docker-compose.yml restart messaging-gateway
 ```
 
-### 5c. Discord (discord.js bot)
+### 5d. Discord (discord.js bot)
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
    → New Application → Bot.
@@ -271,7 +298,7 @@ Set the prompt recipient in `.env`:
 ORC_PROMPT_DISCORD=1234567890123456789
 ```
 
-### 5d. Signal (via signal-cli-rest-api)
+### 5e. Signal (via signal-cli-rest-api)
 
 The `signal-cli-rest-api` container ([bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api))
 provides a JSON-RPC HTTP API around the Java Signal client.
@@ -319,7 +346,7 @@ ORC_PROMPT_SIGNAL=+41791234567
 > signal-cli uses the Signal protocol directly.  Account bans are rare for
 > personal use but possible if traffic patterns are unusual.
 
-### 5e. iMessage (via BlueBubbles — Mac only)
+### 5f. iMessage (via BlueBubbles — Mac only)
 
 iMessage requires Apple hardware running macOS with the Messages app.
 BlueBubbles ([bluebubbles.app](https://bluebubbles.app)) runs on that Mac and
