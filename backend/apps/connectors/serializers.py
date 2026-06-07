@@ -8,6 +8,13 @@ class NotifySerializer(serializers.Serializer):
     message = serializers.CharField()
 
 
+class StartSerializer(serializers.Serializer):
+    connector_id = serializers.CharField(max_length=255)
+    tool = serializers.CharField(max_length=64)
+    workspace_root = serializers.CharField(max_length=1024, default="", allow_blank=True)
+    name = serializers.CharField(max_length=255, default="", allow_blank=True)
+
+
 class AskSerializer(serializers.Serializer):
     connector_id = serializers.CharField(max_length=255)
     tool = serializers.CharField(max_length=64)

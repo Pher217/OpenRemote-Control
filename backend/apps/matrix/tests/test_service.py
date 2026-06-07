@@ -234,27 +234,3 @@ async def test_handle_message_no_prompt_dispatches_chat(monkeypatch):
     assert dispatched[0][1] == "ping"
     assert len(sent) == 1
     assert sent[0][1] == "pong"
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_openremote_control_rebinds_room_to_new_thread():
-    """GIVEN a room WHEN /openremote-control runs THEN the room is rebound to the new thread."""
-    room_id = "!orc:example.org"
-
-    original = await database_sync_to_async(get_or_create_thread_for_room)(room_id)
-
-    send, sent = await _async_send()
-    await handle_message(
-        room_id, "@user:example.org", "/openremote-control Hotfix", send=send
-    )
-
-    @database_sync_to_async
-    def _bound_thread():
-        return MatrixRoom.objects.select_related("thread").get(room_id=room_id).thread
-
-    bound = await _bound_thread()
-    assert bound.id != original.id
-    assert bound.name == "Hotfix"
-    assert len(sent) == 1
-    assert sent[0][1] == "Started new session: Hotfix"

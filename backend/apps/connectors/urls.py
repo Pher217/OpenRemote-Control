@@ -1,10 +1,18 @@
 from django.urls import path
 
-from apps.connectors.views import ApproveView, AskView, NotifyView, PairClaimView, ResultView
+from apps.connectors.views import (
+    ApproveView,
+    AskView,
+    NotifyView,
+    PairClaimView,
+    ResultView,
+    StartView,
+)
 
 app_name = "connectors"
 
 urlpatterns = [
+    path("start", StartView.as_view(), name="start"),
     path("notify", NotifyView.as_view(), name="notify"),
     path("ask", AskView.as_view(), name="ask"),
     path("approve", ApproveView.as_view(), name="approve"),

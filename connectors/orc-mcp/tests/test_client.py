@@ -44,6 +44,27 @@ def test_notify_returns_false_on_error():
     assert _make(handler).notify("hello") is False
 
 
+def test_start_remote_control_posts_and_returns_name():
+    seen = {}
+
+    def handler(req):
+        seen["path"] = req.url.path
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"ok": True, "thread_id": "t1", "name": "Hotfix"})
+
+    assert _make(handler).start_remote_control("Hotfix") == "Hotfix"
+    assert seen["path"] == "/api/connectors/start"
+    assert seen["body"]["name"] == "Hotfix"
+    assert seen["body"]["connector_id"] == "c1"
+
+
+def test_start_remote_control_returns_sentinel_on_error():
+    def handler(req):
+        return httpx.Response(500)
+
+    assert _make(handler).start_remote_control("x") == "[connector error]"
+
+
 def test_ask_posts_then_polls_until_answered():
     calls = {"result": 0}
 

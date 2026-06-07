@@ -1,15 +1,29 @@
 # orc-mcp — OpenRemote-Control universal MCP bridge
 
 `orc-mcp` is purely a **dispatch tool**: install this MCP server into **any MCP-capable
-coding tool** and the agent gains three calls that route through your sovereign
+coding tool** and the agent gains four calls that route through your sovereign
 OpenRemote-Control backend into the chat app you already use (Telegram/Matrix):
 
+- `openremote_control(name)` — start a session and dispatch it to your chat app so you can supervise from your phone (this is the universal `/openremote-control` command).
 - `notify(message)` — push progress to your chat.
 - `ask_human(question, options)` — ask you a question; the agent waits for your reply.
 - `request_approval(action, preview)` — ask you to allow/deny a control action (**fail-closed**: denies on timeout).
 
 It calls only your backend's `/api/connectors/*` endpoints — no vendor APIs, no scraping.
 This is opt-in: the agent calls these tools; we never puppet a closed UI.
+
+## The `/openremote-control` command in Claude Code
+
+A ready-made slash command ships at [`claude/openremote-control.md`](claude/openremote-control.md).
+Drop it into your Claude Code commands so you can type the command in the coding chat:
+
+```bash
+mkdir -p ~/.claude/commands
+cp connectors/orc-mcp/claude/openremote-control.md ~/.claude/commands/
+```
+
+Then `/openremote-control [name]` inside Claude Code calls the `openremote_control` tool,
+which dispatches the session to your messaging app. Other MCP tools call the tool directly.
 
 ## Auth — Ed25519 per-connector identity (recommended)
 

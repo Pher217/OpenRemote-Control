@@ -24,6 +24,63 @@ def _make_async_spy():
 
 
 # ---------------------------------------------------------------------------
+# start_session() delivery routing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStartSessionDelivery:
+    def test_announces_to_telegram_when_chat_id_configured(self, settings, monkeypatch):
+        """
+        GIVEN ORC_PROMPT_CHAT_ID is set and telegram send_message is patched
+        WHEN service.start_session() is called
+        THEN the session-started announcement is sent once to that chat
+        """
+        settings.ORC_PROMPT_CHAT_ID = "777"
+        settings.ORC_PROMPT_MATRIX_ROOM = ""
+
+        calls, spy = _make_async_spy()
+        import apps.telegram.telegram_api as tg_api
+        monkeypatch.setattr(tg_api, "send_message", spy)
+
+        result = connector_service.start_session(
+            connector_id="s-tg-1",
+            tool="claude_code",
+            workspace_root="/tmp",
+            name="Hotfix",
+        )
+
+        assert result["name"] == "Hotfix"
+        assert len(calls) == 1
+        chat_id, text = calls[0][0]
+        assert chat_id == 777
+        assert "Hotfix" in text
+
+    def test_no_announcement_when_no_surface_configured(self, settings, monkeypatch):
+        """
+        GIVEN neither surface is configured
+        WHEN service.start_session() is called
+        THEN no delivery happens and the session is still created
+        """
+        settings.ORC_PROMPT_CHAT_ID = ""
+        settings.ORC_PROMPT_MATRIX_ROOM = ""
+
+        tg_calls, tg_spy = _make_async_spy()
+        import apps.telegram.telegram_api as tg_api
+        monkeypatch.setattr(tg_api, "send_message", tg_spy)
+
+        result = connector_service.start_session(
+            connector_id="s-none-1",
+            tool="claude_code",
+            workspace_root="/tmp",
+            name="Quiet",
+        )
+
+        assert result["name"] == "Quiet"
+        assert len(tg_calls) == 0
+
+
+# ---------------------------------------------------------------------------
 # ask() delivery routing
 # ---------------------------------------------------------------------------
 

@@ -12,7 +12,12 @@ from apps.connectors.auth import (
     HasConnectorToken,
 )
 from apps.connectors.models import ConnectorKey, Pairing
-from apps.connectors.serializers import ApproveSerializer, AskSerializer, NotifySerializer
+from apps.connectors.serializers import (
+    ApproveSerializer,
+    AskSerializer,
+    NotifySerializer,
+    StartSerializer,
+)
 
 
 class _ConnectorTokenNotConfigured(exceptions.APIException):
@@ -32,6 +37,23 @@ class ConnectorBaseView(APIView):
         if getattr(request, "_connector_token_unconfigured", False):
             raise _ConnectorTokenNotConfigured()
         raise exceptions.NotAuthenticated(detail="invalid or missing connector token")
+
+
+class StartView(ConnectorBaseView):
+    def post(self, request):
+        serializer = StartSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        d = serializer.validated_data
+
+        connector_id = service.resolve_connector_id(request, d["connector_id"])
+
+        result = service.start_session(
+            connector_id=connector_id,
+            tool=d["tool"],
+            workspace_root=d.get("workspace_root", ""),
+            name=d.get("name", ""),
+        )
+        return Response({"ok": True, **result}, status=201)
 
 
 class NotifyView(ConnectorBaseView):
