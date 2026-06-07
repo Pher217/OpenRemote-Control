@@ -1,7 +1,7 @@
-"""Matrix plain-text rendering and reply parsing for Prompt objects.
+"""Plain-text rendering and reply parsing for Prompt objects.
 
-Matrix has no native button widgets, and mautrix-bridged rooms (WhatsApp,
-Slack, etc.) only relay plain text.  Prompts therefore render as numbered
+Used by messaging surfaces that have no native button widgets (WhatsApp,
+Slack, Discord, Signal, iMessage, etc.).  Prompts render as numbered
 lists and users respond with a number or free text.
 """
 

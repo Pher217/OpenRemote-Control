@@ -70,6 +70,7 @@ bun.lockb
 .env
 .env.local
 .env.*.local
+.env.tmp
 *.pem
 *.key
 *.crt

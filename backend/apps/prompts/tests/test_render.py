@@ -1,9 +1,9 @@
-"""Pure (no-DB) tests for apps/matrix/render.py."""
+"""Pure (no-DB) tests for apps/prompts/render.py."""
 
 from unittest.mock import MagicMock
 
-from apps.matrix.render import parse_reply, render_prompt
 from apps.prompts.models import Prompt
+from apps.prompts.render import parse_reply, render_prompt
 
 # ---------------------------------------------------------------------------
 # Helpers — build a minimal Prompt-like object without hitting the DB

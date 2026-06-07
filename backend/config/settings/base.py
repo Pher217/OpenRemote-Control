@@ -41,10 +41,10 @@ INSTALLED_APPS = [
     "apps.skills",
     "apps.slash",
     "apps.telegram",
-    "apps.matrix",
     "apps.observe",
     "apps.prompts",
     "apps.connectors",
+    "apps.gateway",
     "apps.hostlink",
 ]
 
@@ -169,8 +169,6 @@ ORC_CONNECTOR_TOKEN = os.environ.get("ORC_CONNECTOR_TOKEN", "")
 ORC_PROMPT_CHAT_ID = os.environ.get("ORC_PROMPT_CHAT_ID") or os.environ.get(
     "TELEGRAM_FORUM_CHAT_ID", ""
 )
-# Matrix room a connector Prompt is also delivered to (numbered text; reply resolves it).
-ORC_PROMPT_MATRIX_ROOM = os.environ.get("ORC_PROMPT_MATRIX_ROOM", "")
 # Multi-host (apps.hostlink): pre-shared one-time enrollment secret a host daemon
 # presents once to receive a per-host token.
 ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
@@ -179,17 +177,13 @@ ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
 # Empty => the pairing payload degrades to just the code (manual --backend still works).
 ORC_PUBLIC_BASE_URL = os.environ.get("ORC_PUBLIC_BASE_URL", "")
 
-# Matrix surface (apps.matrix). Bot connects via long-poll sync; no inbound URL.
-# Approvers must be exact, real (non-puppet) MXIDs — never add a bridge puppet MXID.
-MATRIX_HOMESERVER = os.environ.get("MATRIX_HOMESERVER", "")
-MATRIX_USER_ID = os.environ.get("MATRIX_USER_ID", "")
-MATRIX_ACCESS_TOKEN = os.environ.get("MATRIX_ACCESS_TOKEN", "")
-MATRIX_APPROVED_MXIDS = [
-    x.strip() for x in os.environ.get("MATRIX_APPROVED_MXIDS", "").split(",") if x.strip()
-]
-MATRIX_ALLOWED_ROOMS = [
-    x.strip() for x in os.environ.get("MATRIX_ALLOWED_ROOMS", "").split(",") if x.strip()
-]
+# Messaging gateway (apps.gateway). Node sidecar delivers to WhatsApp/Slack/Discord/Signal/iMessage.
+MESSAGING_GATEWAY_TOKEN = os.environ.get("MESSAGING_GATEWAY_TOKEN", "")
+ORC_PROMPT_WHATSAPP = os.environ.get("ORC_PROMPT_WHATSAPP", "")
+ORC_PROMPT_SLACK    = os.environ.get("ORC_PROMPT_SLACK", "")
+ORC_PROMPT_DISCORD  = os.environ.get("ORC_PROMPT_DISCORD", "")
+ORC_PROMPT_SIGNAL   = os.environ.get("ORC_PROMPT_SIGNAL", "")
+ORC_PROMPT_IMESSAGE = os.environ.get("ORC_PROMPT_IMESSAGE", "")
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

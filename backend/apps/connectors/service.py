@@ -108,16 +108,6 @@ def _broadcast_text(text: str) -> None:
         except Exception:
             logger.exception("connector broadcast: telegram delivery failed (best-effort)")
 
-    matrix_room = getattr(settings, "ORC_PROMPT_MATRIX_ROOM", "")
-    if matrix_room:
-        try:
-            from apps.matrix.client import send_text
-
-            async_to_sync(send_text)(matrix_room, text)
-        except Exception:
-            logger.exception("connector broadcast: matrix delivery failed (best-effort)")
-
-
 def start_session(
     connector_id: str,
     tool: str,
@@ -296,12 +286,29 @@ def _deliver(prompt: Prompt) -> None:
         except Exception:
             logger.exception("connector deliver: telegram delivery failed (best-effort)")
 
-    matrix_room = getattr(settings, "ORC_PROMPT_MATRIX_ROOM", "")
-    if matrix_room:
-        try:
-            from apps.matrix.client import send_text
-            from apps.matrix.render import render_prompt
+    # Gateway surfaces (WhatsApp / Slack / Discord / Signal / iMessage via Node sidecar).
+    _deliver_to_gateway(prompt)
 
-            async_to_sync(send_text)(matrix_room, render_prompt(prompt))
+
+def _deliver_to_gateway(prompt: Prompt) -> None:
+    """Enqueue to each configured gateway platform. Best-effort, never raises."""
+    gateway_settings = [
+        ("ORC_PROMPT_WHATSAPP", "whatsapp"),
+        ("ORC_PROMPT_SLACK", "slack"),
+        ("ORC_PROMPT_DISCORD", "discord"),
+        ("ORC_PROMPT_SIGNAL", "signal"),
+        ("ORC_PROMPT_IMESSAGE", "imessage"),
+    ]
+    for setting_name, platform in gateway_settings:
+        recipient = getattr(settings, setting_name, "")
+        if not recipient:
+            continue
+        try:
+            from apps.gateway.service import enqueue_prompt
+
+            enqueue_prompt(platform, recipient, prompt)
         except Exception:
-            logger.exception("connector deliver: matrix delivery failed (best-effort)")
+            logger.exception(
+                "connector deliver: gateway delivery failed (best-effort) platform=%s",
+                platform,
+            )

@@ -2,6 +2,11 @@
 # deploy/app/docker-compose.yml
 # Bring up: docker compose -f deploy/app/docker-compose.yml up -d
 # Env file:  deploy/.env  (one level up from this file)
+#
+# iMessage / BlueBubbles note: BlueBubbles must run on a Mac (not a container).
+# It connects to the gateway over the Tailscale/Headscale mesh and POSTs
+# inbound iMessages to the gateway's IMESSAGE_WEBHOOK_PORT (default 3001).
+# That port is bound to 127.0.0.1 below — the Mac reaches it via the mesh.
 
 name: orc
 
@@ -82,16 +87,6 @@ services:
       valkey:
         condition: service_healthy
 
-  matrix-bot:
-    <<: *app
-    restart: always
-    command: ["python", "manage.py", "run_matrix_bot"]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      valkey:
-        condition: service_healthy
-
   session-observer:
     <<: *app
     restart: always
@@ -101,6 +96,40 @@ services:
         condition: service_completed_successfully
       valkey:
         condition: service_healthy
+
+  # -- Messaging gateway (WhatsApp / Slack / Discord / Signal / iMessage) ---
+  # The gateway polls /api/gateway/outbox and POSTs to /api/gateway/inbound.
+  # WhatsApp auth state and Signal data are persisted in the named volume below.
+  messaging-gateway:
+    build:
+      context: ../../connectors/messaging-gateway
+      dockerfile: Dockerfile
+    image: orc-messaging-gateway:latest
+    restart: unless-stopped
+    env_file: ../.env
+    volumes:
+      - messaging_gateway_data:/app/data
+    depends_on:
+      web:
+        condition: service_healthy
+    networks:
+      - app
+
+  # -- signal-cli-rest-api ---------------------------------------------------
+  # Provides a JSON-RPC HTTP API for Signal messaging.
+  # Docs: https://github.com/bbernhard/signal-cli-rest-api
+  # First-time setup: register or link a phone number via the REST API.
+  # Only enabled when signal is in ENABLED_PLATFORMS.
+  signal-cli-rest-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    restart: unless-stopped
+    environment:
+      - MODE=json-rpc
+    volumes:
+      - signal_cli_data:/home/.local/share/signal-cli
+    # Not exposed publicly; gateway reaches it at http://signal-cli-rest-api:8080
+    networks:
+      - app
 
   # -- PostgreSQL ------------------------------------------------------------
   postgres:
@@ -143,6 +172,8 @@ services:
 volumes:
   postgres_data:
   valkey_data:
+  messaging_gateway_data:
+  signal_cli_data:
 
 networks:
   app:

@@ -19,7 +19,6 @@ dependencies = [
     "gunicorn>=23.0",
     "httpx>=0.27",
     "segno>=1.6",
-    "matrix-nio>=0.24",
     "uvicorn[standard]>=0.30",
     "whitenoise>=6.7",
 ]

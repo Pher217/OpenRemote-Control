@@ -20,7 +20,6 @@ services:
       - caddy_config:/config
     networks:
       - app
-      - matrix
       - headscale
 
 volumes:
@@ -28,13 +27,10 @@ volumes:
   caddy_config:
 
 networks:
-  # Join pre-existing networks created by the app, matrix, and headscale stacks.
+  # Join pre-existing networks created by the app and headscale stacks.
   # Start each stack before starting Caddy so these external networks exist.
   app:
     name: orc_app
-    external: true
-  matrix:
-    name: orc_matrix
     external: true
   headscale:
     name: orc_headscale
