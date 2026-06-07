@@ -7,6 +7,8 @@ from apps.telegram import telegram_api
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 
 TELEGRAM_MAX = 4096
+# Maximum characters shown in a digest excerpt before truncation.
+_DIGEST_EXCERPT_MAX = 300
 
 
 def pick_color(session_id: str) -> int:
@@ -18,6 +20,13 @@ def _topic_name(thread) -> str:
     repo = thread.metadata.get("repo") or "?"
     title = thread.metadata.get("title") or thread.external_session_ref[:8]
     return f"{prov} · {repo} · {title}"[:128]
+
+
+def _truncate_digest(text: str) -> str:
+    """Truncate text to _DIGEST_EXCERPT_MAX chars with a trailing ellipsis."""
+    if len(text) <= _DIGEST_EXCERPT_MAX:
+        return text
+    return text[:_DIGEST_EXCERPT_MAX] + "…"
 
 
 @database_sync_to_async
@@ -36,9 +45,26 @@ def _save_topic_id(thread, topic_id, color, forum_chat_id) -> None:
     thread.save(update_fields=["metadata"])
 
 
+@database_sync_to_async
+def _save_digest_state(thread, digest_message_id, digest_steps) -> None:
+    thread.metadata["telegram_digest_message_id"] = digest_message_id
+    thread.metadata["telegram_digest_steps"] = digest_steps
+    thread.save(update_fields=["metadata"])
+
+
+@database_sync_to_async
+def _clear_digest_state(thread) -> None:
+    thread.metadata.pop("telegram_digest_message_id", None)
+    thread.metadata.pop("telegram_digest_steps", None)
+    thread.save(update_fields=["metadata"])
+
+
 async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
     if api is None:
         api = telegram_api
+
+    mode = getattr(settings, "OBSERVE_DELIVERY_MODE", "progress")
+    role = parsed["role"]
 
     existing, name, color = await _ensure_topic_id(thread, forum_chat_id)
     if existing is None:
@@ -54,6 +80,7 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
             f"<b>{_esc(title)}</b>\n"
             f"session <code>{_esc(thread.external_session_ref)}</code>"
         )
+        # Session-start intro always notifies (disable_notification omitted → default notify).
         await api.send_message(
             forum_chat_id, intro, message_thread_id=topic_id, parse_mode="HTML"
         )
@@ -65,27 +92,113 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
         user_label=settings.TELEGRAM_USER_LABEL,
         assistant_label=settings.TELEGRAM_ASSISTANT_LABEL,
     )
-    try:
-        await api.send_message(
+
+    if role == "user":
+        # Milestone: post a fresh notifying message, then freeze any active digest so
+        # the next assistant turn starts a new digest thread.
+        await _clear_digest_state(thread)
+        try:
+            await api.send_message(
+                forum_chat_id,
+                html,
+                message_thread_id=topic_id,
+                parse_mode="HTML",
+                disable_notification=False,
+            )
+        except Exception:
+            label = settings.TELEGRAM_USER_LABEL
+            plain = f"{label}: {parsed['text'][:3900]}"
+            await api.send_message(
+                forum_chat_id,
+                plain,
+                message_thread_id=topic_id,
+                disable_notification=False,
+            )
+        return
+
+    # role == "assistant"
+    if mode == "milestones_only":
+        return
+
+    if mode == "all":
+        try:
+            await api.send_message(
+                forum_chat_id,
+                html,
+                message_thread_id=topic_id,
+                parse_mode="HTML",
+                disable_notification=True,
+            )
+        except Exception:
+            label = settings.TELEGRAM_ASSISTANT_LABEL
+            plain = f"{label}: {parsed['text'][:3900]}"
+            await api.send_message(
+                forum_chat_id,
+                plain,
+                message_thread_id=topic_id,
+                disable_notification=True,
+            )
+        return
+
+    # mode == "progress": maintain a per-thread digest message edited in place.
+    digest_msg_id = thread.metadata.get("telegram_digest_message_id")
+    digest_steps = thread.metadata.get("telegram_digest_steps", 0)
+
+    if digest_msg_id is None:
+        # No active digest — send a new silent message and store its id.
+        try:
+            new_id = await api.send_message(
+                forum_chat_id,
+                html,
+                message_thread_id=topic_id,
+                parse_mode="HTML",
+                disable_notification=True,
+            )
+        except Exception:
+            label = settings.TELEGRAM_ASSISTANT_LABEL
+            plain = f"{label}: {parsed['text'][:3900]}"
+            new_id = await api.send_message(
+                forum_chat_id,
+                plain,
+                message_thread_id=topic_id,
+                disable_notification=True,
+            )
+        await _save_digest_state(thread, new_id, 1)
+    else:
+        # Active digest — edit the existing message in place (no re-notification).
+        digest_steps += 1
+        excerpt = _truncate_digest(parsed["text"])
+        label = settings.TELEGRAM_ASSISTANT_LABEL
+        suffix = f" (+{digest_steps} steps)" if digest_steps > 1 else ""
+        digest_text = f"{label}: {excerpt}{suffix}"
+
+        edited = await api.edit_message_text(
             forum_chat_id,
-            html,
+            digest_msg_id,
+            digest_text,
             message_thread_id=topic_id,
-            parse_mode="HTML",
-            disable_notification=True,
         )
-    except Exception:
-        label = (
-            settings.TELEGRAM_USER_LABEL
-            if parsed["role"] == "user"
-            else settings.TELEGRAM_ASSISTANT_LABEL
-        )
-        plain = f"{label}: {parsed['text'][:3900]}"
-        await api.send_message(
-            forum_chat_id,
-            plain,
-            message_thread_id=topic_id,
-            disable_notification=True,
-        )
+        if not edited:
+            # Edit failed (message too old / deleted) — start a fresh digest.
+            try:
+                new_id = await api.send_message(
+                    forum_chat_id,
+                    html,
+                    message_thread_id=topic_id,
+                    parse_mode="HTML",
+                    disable_notification=True,
+                )
+            except Exception:
+                plain = f"{label}: {parsed['text'][:3900]}"
+                new_id = await api.send_message(
+                    forum_chat_id,
+                    plain,
+                    message_thread_id=topic_id,
+                    disable_notification=True,
+                )
+            await _save_digest_state(thread, new_id, digest_steps)
+        else:
+            await _save_digest_state(thread, digest_msg_id, digest_steps)
 
 
 async def deliver_turn_active(thread, parsed, msg, *, api=None) -> None:

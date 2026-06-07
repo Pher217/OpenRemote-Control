@@ -157,6 +157,11 @@ OBSERVE_PROJECTS = [
 ]
 OBSERVE_ACTIVE_MINUTES = int(os.environ.get("OBSERVE_ACTIVE_MINUTES", "0") or "0")
 OBSERVER_RUNTIME = os.environ.get("OBSERVER_RUNTIME", "claude_code")
+# Controls how assistant turns are delivered to Telegram.
+# "progress"       — collapse consecutive assistant turns into one edited message (default).
+# "all"            — post a new silent message per turn (legacy behaviour).
+# "milestones_only"— drop assistant turns entirely; only user turns + session-start notify.
+OBSERVE_DELIVERY_MODE = os.environ.get("OBSERVE_DELIVERY_MODE", "progress")
 # Comma-separated list of runtimes to observe concurrently. Empty => fall back to
 # OBSERVER_RUNTIME (single, legacy). Each runtime resolves its own scan root/glob.
 OBSERVE_RUNTIMES = [

@@ -1,5 +1,6 @@
 import pytest
 from channels.db import database_sync_to_async
+from django.test import override_settings
 
 from apps.observe.delivery import TELEGRAM_MAX, _topic_name, deliver_turn, pick_color
 from apps.observe.service import apply_session_meta, get_or_create_observed_thread
@@ -9,10 +10,13 @@ from apps.threads.models import Thread
 
 class _FakeApi:
     def __init__(self):
+        self._next_msg_id = 100
         self._next_id = 1000
         self.create_calls = []
         self.send_calls = []
         self.send_kwargs = []
+        self.edit_calls = []  # list of (chat_id, message_id, text, kwargs)
+        self._edit_ok = True  # set False to simulate edit failure
 
     async def create_forum_topic(self, chat_id, name, icon_color):
         self.create_calls.append((chat_id, name, icon_color))
@@ -27,7 +31,7 @@ class _FakeApi:
         message_thread_id=None,
         parse_mode=None,
         disable_notification=None,
-    ):
+    ) -> int:
         self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
         self.send_kwargs.append(
             {
@@ -36,6 +40,23 @@ class _FakeApi:
                 "disable_notification": disable_notification,
             }
         )
+        msg_id = self._next_msg_id
+        self._next_msg_id += 1
+        return msg_id
+
+    async def edit_message_text(
+        self,
+        chat_id,
+        message_id,
+        text,
+        *,
+        message_thread_id=None,
+        parse_mode=None,
+    ) -> bool:
+        self.edit_calls.append(
+            (chat_id, message_id, text, {"message_thread_id": message_thread_id})
+        )
+        return self._edit_ok
 
 
 @pytest.mark.django_db(transaction=True)
@@ -54,9 +75,10 @@ async def test_creates_one_topic_per_session_and_routes():
     turn_a2 = {"role": "assistant", "text": "yo", "uuid": "2", "session_id": "Saaaaaaa"}
     turn_b1 = {"role": "user", "text": "hey", "uuid": "3", "session_id": "Sbbbbbbb"}
 
-    await deliver_turn(thread_a, turn_a1, None, forum_chat_id=-100999, api=fake)
-    await deliver_turn(thread_a, turn_a2, None, forum_chat_id=-100999, api=fake)
-    await deliver_turn(thread_b, turn_b1, None, forum_chat_id=-100999, api=fake)
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(thread_a, turn_a1, None, forum_chat_id=-100999, api=fake)
+        await deliver_turn(thread_a, turn_a2, None, forum_chat_id=-100999, api=fake)
+        await deliver_turn(thread_b, turn_b1, None, forum_chat_id=-100999, api=fake)
 
     assert len(fake.create_calls) == 2
     for _chat_id, _name, color in fake.create_calls:
@@ -105,7 +127,8 @@ async def test_truncates_long_text():
         "session_id": "Slooooong",
     }
 
-    await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+    with override_settings(OBSERVE_DELIVERY_MODE="all"):
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
 
     sent_text = fake.send_calls[-1][1]
     assert len(sent_text) <= TELEGRAM_MAX
@@ -129,6 +152,14 @@ async def test_falls_back_to_plain_text_on_html_send_failure():
             if parse_mode == "HTML":
                 raise RuntimeError("can't parse entities")
             self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
+            self.send_kwargs.append(
+                {
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_notification": disable_notification,
+                }
+            )
+            return self._next_msg_id
 
     fake = _FailingHtmlApi()
     thread = await database_sync_to_async(get_or_create_observed_thread)(
@@ -148,7 +179,8 @@ async def test_falls_back_to_plain_text_on_html_send_failure():
         "session_id": "Sfallbck",
     }
 
-    await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
 
     assert len(fake.send_calls) == 1
     _chat_id, text, _topic, parse_mode = fake.send_calls[0]
@@ -176,8 +208,9 @@ async def test_topic_name_and_intro_from_meta():
     turn1 = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Smeta123"}
     turn2 = {"role": "assistant", "text": "yo", "uuid": "2", "session_id": "Smeta123"}
 
-    await deliver_turn(thread, turn1, None, forum_chat_id=-100999, api=fake)
-    await deliver_turn(thread, turn2, None, forum_chat_id=-100999, api=fake)
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(thread, turn1, None, forum_chat_id=-100999, api=fake)
+        await deliver_turn(thread, turn2, None, forum_chat_id=-100999, api=fake)
 
     assert len(fake.create_calls) == 1
     _chat_id, name, _color = fake.create_calls[0]
@@ -196,11 +229,11 @@ async def test_topic_name_and_intro_from_meta():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_turn_is_silent_while_intro_notifies():
+async def test_intro_notifies_user_turn_notifies():
     """
-    GIVEN a new observed session
-    WHEN the first turn is delivered
-    THEN the topic-intro message notifies and the turn message is silent.
+    GIVEN a new observed session in progress mode
+    WHEN the first (user) turn is delivered
+    THEN the topic-intro message notifies and the user turn also notifies.
     """
     fake = _FakeApi()
     thread = await database_sync_to_async(get_or_create_observed_thread)(
@@ -208,11 +241,13 @@ async def test_turn_is_silent_while_intro_notifies():
     )
     turn = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Ssilent1"}
 
-    await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
 
-    # First send is the intro (default notification); the turn send is silent.
+    # First send is the intro (default notification, disable_notification omitted → None).
     assert fake.send_kwargs[0]["disable_notification"] is None
-    assert fake.send_kwargs[-1]["disable_notification"] is True
+    # User turn is a milestone — it notifies (disable_notification=False, not True/None).
+    assert fake.send_kwargs[-1]["disable_notification"] is False
 
 
 def test_pick_color_deterministic():
@@ -237,7 +272,8 @@ async def test_save_topic_id_persists_forum_chat_id():
     )
     turn = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Sforum01"}
 
-    await deliver_turn(thread, turn, None, forum_chat_id=-100777, api=fake)
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(thread, turn, None, forum_chat_id=-100777, api=fake)
 
     @database_sync_to_async
     def _meta():
@@ -247,3 +283,312 @@ async def test_save_topic_id_persists_forum_chat_id():
     forum_id, topic_id = await _meta()
     assert topic_id is not None
     assert forum_id == -100777
+
+
+# ── New tests for progress-mode digest behaviour ──────────────────────────────
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_progress_mode_collapses_assistant_turns_into_digest():
+    """
+    GIVEN progress mode and 3 consecutive assistant turns
+    WHEN all three turns are delivered
+    THEN ONE initial send + TWO edits (not 3 sends); digest message_id stored in metadata.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sprogr01", "/tmp/p1.jsonl"
+    )
+
+    turns = [
+        {"role": "assistant", "text": f"step {i}", "uuid": str(i), "session_id": "Sprogr01"}
+        for i in range(3)
+    ]
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        for t in turns:
+            await deliver_turn(thread, t, None, forum_chat_id=-100999, api=fake)
+
+    # 1 topic create, 1 intro send, 1 initial digest send = 2 sends total.
+    # (intro is send_calls[0], digest is send_calls[1])
+    assert len(fake.send_calls) == 2
+    # 2 edits for turns 2 and 3
+    assert len(fake.edit_calls) == 2
+
+    @database_sync_to_async
+    def _digest_id():
+        return Thread.objects.get(id=thread.id).metadata.get("telegram_digest_message_id")
+
+    stored_id = await _digest_id()
+    assert stored_id is not None
+    # The stored id must be the id returned by the initial send.
+    assert stored_id == fake.send_calls[1][0] or stored_id == 101  # intro=100, digest=101
+    # Verify edit was called with the stored digest message id.
+    first_edit_msg_id = fake.edit_calls[0][1]
+    assert first_edit_msg_id == stored_id
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_progress_mode_user_turn_notifies_and_resets_digest():
+    """
+    GIVEN progress mode with an active assistant digest
+    WHEN a user turn is delivered
+    THEN a fresh notifying message is posted and telegram_digest_message_id is cleared.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sprogr02", "/tmp/p2.jsonl"
+    )
+
+    assistant_turn = {
+        "role": "assistant",
+        "text": "thinking...",
+        "uuid": "1",
+        "session_id": "Sprogr02",
+    }
+    user_turn = {
+        "role": "user",
+        "text": "next question",
+        "uuid": "2",
+        "session_id": "Sprogr02",
+    }
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(thread, assistant_turn, None, forum_chat_id=-100999, api=fake)
+        await deliver_turn(thread, user_turn, None, forum_chat_id=-100999, api=fake)
+
+    # The user turn send must have disable_notification=False.
+    user_turn_kwargs = fake.send_kwargs[-1]
+    assert user_turn_kwargs["disable_notification"] is False
+
+    # Digest metadata must be cleared after the user turn.
+    @database_sync_to_async
+    def _meta():
+        t = Thread.objects.get(id=thread.id)
+        return (
+            t.metadata.get("telegram_digest_message_id"),
+            t.metadata.get("telegram_digest_steps"),
+        )
+
+    digest_id, digest_steps = await _meta()
+    assert digest_id is None
+    assert digest_steps is None
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_progress_mode_next_assistant_after_user_starts_fresh_digest():
+    """
+    GIVEN progress mode, a user turn (which clears the digest), then an assistant turn
+    WHEN the assistant turn is delivered
+    THEN a brand-new send is made (not an edit), and a new digest id is stored.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sprogr03", "/tmp/p3.jsonl"
+    )
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(
+            thread,
+            {"role": "user", "text": "hi", "uuid": "1", "session_id": "Sprogr03"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+        sends_after_user = len(fake.send_calls)
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "reply", "uuid": "2", "session_id": "Sprogr03"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+
+    # One more send for the new digest (no edit).
+    assert len(fake.send_calls) == sends_after_user + 1
+    assert len(fake.edit_calls) == 0
+
+    @database_sync_to_async
+    def _digest_id():
+        return Thread.objects.get(id=thread.id).metadata.get("telegram_digest_message_id")
+
+    assert await _digest_id() is not None
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_milestones_only_drops_assistant_turns():
+    """
+    GIVEN milestones_only mode
+    WHEN assistant turns and a user turn are delivered
+    THEN assistant turns are dropped (no send beyond intro); user turn posts a fresh message.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Smilest1", "/tmp/ms1.jsonl"
+    )
+
+    with override_settings(OBSERVE_DELIVERY_MODE="milestones_only"):
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "thinking", "uuid": "1", "session_id": "Smilest1"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "still thinking", "uuid": "2", "session_id": "Smilest1"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+        await deliver_turn(
+            thread,
+            {"role": "user", "text": "hello", "uuid": "3", "session_id": "Smilest1"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+
+    # Only intro + user turn = 2 sends; no edits.
+    assert len(fake.send_calls) == 2
+    assert len(fake.edit_calls) == 0
+    # The last send is the user turn (milestone), which notifies.
+    assert fake.send_kwargs[-1]["disable_notification"] is False
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_all_mode_sends_each_assistant_turn_silently():
+    """
+    GIVEN all (legacy) mode
+    WHEN three assistant turns are delivered
+    THEN each turn posts its own silent message (no edits).
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sallmod1", "/tmp/al1.jsonl"
+    )
+
+    with override_settings(OBSERVE_DELIVERY_MODE="all"):
+        for i in range(3):
+            await deliver_turn(
+                thread,
+                {
+                    "role": "assistant",
+                    "text": f"turn {i}",
+                    "uuid": str(i),
+                    "session_id": "Sallmod1",
+                },
+                None,
+                forum_chat_id=-100999,
+                api=fake,
+            )
+
+    # intro + 3 assistant sends = 4 sends; no edits.
+    assert len(fake.send_calls) == 4
+    assert len(fake.edit_calls) == 0
+    # All assistant sends are silent.
+    for kwargs in fake.send_kwargs[1:]:  # skip intro
+        assert kwargs["disable_notification"] is True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_send_message_returns_id_and_edit_uses_it():
+    """
+    GIVEN progress mode and two consecutive assistant turns
+    WHEN the second assistant turn is delivered
+    THEN edit_message_text is called with the message_id returned by the first send.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sretid01", "/tmp/ri1.jsonl"
+    )
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "first", "uuid": "1", "session_id": "Sretid01"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+        # At this point intro was send_calls[0] (msg_id=100), digest was send_calls[1] (msg_id=101).
+        first_digest_id = fake.send_calls[1][0]  # chat_id — need the returned id instead
+
+        @database_sync_to_async
+        def _stored_digest_id():
+            return Thread.objects.get(id=thread.id).metadata.get("telegram_digest_message_id")
+
+        stored = await _stored_digest_id()
+        assert stored is not None  # send_message returned an int id
+
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "second", "uuid": "2", "session_id": "Sretid01"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+
+    # edit_message_text must have been called once, with the stored digest id.
+    assert len(fake.edit_calls) == 1
+    _chat_id, edit_msg_id, _text, _kwargs = fake.edit_calls[0]
+    assert edit_msg_id == stored
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_progress_mode_edit_failure_falls_back_to_fresh_send():
+    """
+    GIVEN progress mode and an active digest whose edit fails
+    WHEN the next assistant turn is delivered
+    THEN a fresh message is sent and the stored digest id is updated.
+    """
+    fake = _FakeApi()
+    fake._edit_ok = False  # simulate edit failure (message too old / deleted)
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Seditfl1", "/tmp/ef1.jsonl"
+    )
+
+    @database_sync_to_async
+    def _get_digest_id():
+        return Thread.objects.get(id=thread.id).metadata.get("telegram_digest_message_id")
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "first", "uuid": "1", "session_id": "Seditfl1"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+        first_stored = await _get_digest_id()
+
+        await deliver_turn(
+            thread,
+            {"role": "assistant", "text": "second", "uuid": "2", "session_id": "Seditfl1"},
+            None,
+            forum_chat_id=-100999,
+            api=fake,
+        )
+
+    # Edit was attempted but failed → a new send happened.
+    assert len(fake.edit_calls) == 1
+    assert fake.edit_calls[0][1] == first_stored
+    # Total sends: intro + first digest + fallback digest = 3.
+    assert len(fake.send_calls) == 3
+
+    @database_sync_to_async
+    def _new_stored():
+        return Thread.objects.get(id=thread.id).metadata.get("telegram_digest_message_id")
+
+    new_stored = await _new_stored()
+    # Digest id updated to the new message.
+    assert new_stored is not None
+    assert new_stored != first_stored
