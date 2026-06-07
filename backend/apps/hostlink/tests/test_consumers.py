@@ -221,3 +221,64 @@ class TestHostDaemonConsumer:
         assert "world from the daemon" in msgs
 
         await communicator.disconnect()
+
+    async def test_session_line_parsed_server_side(self, host, host_token):
+        """
+        GIVEN a connected daemon shipping a RAW claude_code JSONL line
+        WHEN a session.line message is sent
+        THEN the backend parses it and persists a Message on a host-stamped Thread
+        """
+        import asyncio
+        import json as _json
+
+        from channels.db import database_sync_to_async
+
+        qs = _qs(host, host_token)
+        communicator = WebsocketCommunicator(
+            _test_application, f"ws/hosts/{host.id}/?{qs}"
+        )
+        connected, _ = await communicator.connect()
+        assert connected is True
+
+        raw = _json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "u-line-1",
+                "sessionId": "sess-line-001",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "from a raw line"}],
+                },
+            }
+        )
+        await communicator.send_json_to(
+            {
+                "type": "session.line",
+                "data": {
+                    "provider": "claude_code",
+                    "jsonl_path": "/tmp/sess-line-001.jsonl",
+                    "raw": raw,
+                },
+            }
+        )
+        await asyncio.sleep(0.2)
+
+        @database_sync_to_async
+        def _fetch():
+            t = Thread.objects.filter(external_session_ref="sess-line-001").first()
+            if t is None:
+                return (None, [])
+            return (
+                t.host_id,
+                list(
+                    Message.objects.filter(thread=t).values_list(
+                        "redacted_content", flat=True
+                    )
+                ),
+            )
+
+        host_id, msgs = await _fetch()
+        assert host_id == host.id
+        assert "from a raw line" in msgs
+
+        await communicator.disconnect()
