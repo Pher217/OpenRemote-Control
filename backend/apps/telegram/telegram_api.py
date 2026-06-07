@@ -47,6 +47,7 @@ async def send_message(
     message_thread_id=None,
     parse_mode=None,
     reply_markup=None,
+    disable_notification=None,
 ) -> None:
     payload = {"chat_id": chat_id, "text": text}
     if message_thread_id is not None:
@@ -55,6 +56,8 @@ async def send_message(
         payload["parse_mode"] = parse_mode
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
+    if disable_notification is not None:
+        payload["disable_notification"] = disable_notification
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         resp = await client.post(
             f"{_base_url()}/sendMessage",

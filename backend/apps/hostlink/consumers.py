@@ -3,6 +3,7 @@ from pathlib import Path
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
+from django.conf import settings
 from django.core.cache import cache
 
 from apps.hostlink import security
@@ -119,6 +120,9 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         if role and text:
             await record_turn(thread, role, text)
+            await self._deliver_to_telegram(
+                thread, {"role": role, "text": text, "session_id": session_id}
+            )
 
     async def _handle_session_line(self, data: dict):
         """Persist a single raw transcript line, parsed server-side.
@@ -163,6 +167,28 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             await database_sync_to_async(apply_session_meta)(thread, meta)
         if parsed:
             await record_turn(thread, parsed["role"], parsed["text"])
+            await self._deliver_to_telegram(thread, parsed)
+
+    async def _deliver_to_telegram(self, thread, parsed):
+        """Forward an observed turn from a remote host to the Telegram forum.
+
+        Mirrors the local run_session_observer delivery path so multi-host
+        sessions surface in the same inbox. Best-effort: delivery failures must
+        never break transcript ingestion.
+        """
+        forum_chat_id = getattr(settings, "ORC_PROMPT_CHAT_ID", "") or getattr(
+            settings, "TELEGRAM_FORUM_CHAT_ID", ""
+        )
+        if not forum_chat_id:
+            return
+        from apps.observe.delivery import deliver_turn
+
+        try:
+            await deliver_turn(
+                thread, parsed, None, forum_chat_id=int(forum_chat_id)
+            )
+        except Exception:
+            pass
 
     # Group handler for future downstream commands sent via channel_layer.group_send.
     async def host_command(self, event):

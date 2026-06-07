@@ -19,7 +19,14 @@ class _FakeApi:
         self._next_id += 1
         return topic_id
 
-    async def send_message(self, chat_id, text, message_thread_id=None, parse_mode=None):
+    async def send_message(
+        self,
+        chat_id,
+        text,
+        message_thread_id=None,
+        parse_mode=None,
+        disable_notification=None,
+    ):
         self.send_calls.append((chat_id, text, message_thread_id, parse_mode))
 
 
@@ -104,7 +111,12 @@ async def test_falls_back_to_plain_text_on_html_send_failure():
 
     class _FailingHtmlApi(_FakeApi):
         async def send_message(
-            self, chat_id, text, message_thread_id=None, parse_mode=None
+            self,
+            chat_id,
+            text,
+            message_thread_id=None,
+            parse_mode=None,
+            disable_notification=None,
         ):
             if parse_mode == "HTML":
                 raise RuntimeError("can't parse entities")
