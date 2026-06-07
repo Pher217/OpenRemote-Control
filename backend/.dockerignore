@@ -1,0 +1,18 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+staticfiles
+.git
+.gitignore
+node_modules
+*.egg-info
+dist
+build
+.env
+.env.*
+# Keep tests — they are not COPY'd into the final stage but excluding them
+# would break `--mount=type=bind` patterns if ever used for tests.
