@@ -56,6 +56,82 @@ def _create_pairing(tool: str, label: str, ttl: int = 900):
     return pairing.code, pairing.expires_at
 
 
+@database_sync_to_async
+def _lookup_thread_for_topic(forum_chat_id: int, message_thread_id: int):
+    """Return the Thread whose topic lives in this forum, or None."""
+    return (
+        Thread.objects.select_related("host")
+        .filter(
+            metadata__telegram_topic_id=message_thread_id,
+            metadata__telegram_forum_chat_id=forum_chat_id,
+        )
+        .first()
+    )
+
+
+async def handle_forum_reply(
+    forum_chat_id: int,
+    message_thread_id: int,
+    from_user_id: int,
+    text: str,
+    *,
+    send,
+) -> None:
+    """Handle a user reply sent inside a Telegram forum topic.
+
+    Auth: from_user_id must be in TELEGRAM_ALLOWED_CHAT_IDS AND
+          forum_chat_id must match TELEGRAM_FORUM_CHAT_ID.
+    Behaviour in Phase 1:
+      - Unknown topic → inform user.
+      - Read-only session (not PTY / no host / no tmux_session_name) → inform user.
+      - Driveable PTY session → placeholder reply (injection is Phase 4).
+    """
+    # --- Auth gate -----------------------------------------------------------
+    if from_user_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
+        return
+
+    forum_setting = settings.TELEGRAM_FORUM_CHAT_ID
+    if not forum_setting:
+        return
+    try:
+        configured_forum_id = int(forum_setting)
+    except (ValueError, TypeError):
+        return
+    if forum_chat_id != configured_forum_id:
+        return
+
+    # --- Reverse lookup ------------------------------------------------------
+    thread = await _lookup_thread_for_topic(forum_chat_id, message_thread_id)
+    if thread is None:
+        await send(
+            forum_chat_id,
+            "No matching session for this topic.",
+            message_thread_id=message_thread_id,
+        )
+        return
+
+    # --- Read-only guard -----------------------------------------------------
+    is_pty = thread.runtime_mode == Thread.RuntimeModeChoices.PTY
+    has_host = thread.host_id is not None
+    has_tmux = bool(thread.metadata.get("tmux_session_name"))
+
+    if not (is_pty and has_host and has_tmux):
+        await send(
+            forum_chat_id,
+            "This session is read-only — start it with `orc run` to send input.",
+            message_thread_id=message_thread_id,
+        )
+        return
+
+    # --- Driveable PTY session -----------------------------------------------
+    # TODO(phase 4): dispatch pty.inject — send text to the running PTY session.
+    await send(
+        forum_chat_id,
+        "Input routing not wired yet (phase 4).",
+        message_thread_id=message_thread_id,
+    )
+
+
 async def handle_update(chat_id: int, text: str, *, send):
     if chat_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
         return

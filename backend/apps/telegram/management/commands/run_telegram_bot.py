@@ -4,7 +4,7 @@ import logging
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from apps.telegram.service import handle_callback_query, handle_update
+from apps.telegram.service import handle_callback_query, handle_forum_reply, handle_update
 from apps.telegram.telegram_api import (
     answer_callback_query,
     get_updates,
@@ -54,7 +54,18 @@ class Command(BaseCommand):
                         continue
                     chat_id = message["chat"]["id"]
                     text = message["text"]
-                    await handle_update(chat_id, text, send=send_message)
+                    message_thread_id = message.get("message_thread_id")
+                    from_user_id = message.get("from", {}).get("id")
+                    if message_thread_id is not None:
+                        await handle_forum_reply(
+                            chat_id,
+                            message_thread_id,
+                            from_user_id,
+                            text,
+                            send=send_message,
+                        )
+                    else:
+                        await handle_update(chat_id, text, send=send_message)
                 except Exception as exc:
                     logger.error(
                         "telegram update handling failed: %s", redact_token(repr(exc))

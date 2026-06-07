@@ -29,9 +29,10 @@ def _ensure_topic_id(thread, forum_chat_id) -> tuple[int | None, str, int]:
 
 
 @database_sync_to_async
-def _save_topic_id(thread, topic_id, color) -> None:
+def _save_topic_id(thread, topic_id, color, forum_chat_id) -> None:
     thread.metadata["telegram_topic_id"] = topic_id
     thread.metadata["telegram_icon_color"] = color
+    thread.metadata["telegram_forum_chat_id"] = forum_chat_id
     thread.save(update_fields=["metadata"])
 
 
@@ -42,7 +43,7 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
     existing, name, color = await _ensure_topic_id(thread, forum_chat_id)
     if existing is None:
         topic_id = await api.create_forum_topic(forum_chat_id, name, color)
-        await _save_topic_id(thread, topic_id, color)
+        await _save_topic_id(thread, topic_id, color, forum_chat_id)
         prov = thread.metadata.get("provider") or thread.runtime
         repo = thread.metadata.get("repo") or "?"
         branch = thread.metadata.get("branch") or ""
