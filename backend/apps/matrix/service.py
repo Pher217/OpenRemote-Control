@@ -57,12 +57,6 @@ def _get_thread_with_account(thread_id) -> Thread:
     return Thread.objects.select_related("account").get(id=thread_id)
 
 
-@database_sync_to_async
-def _rebind_room(room_id: str, thread_id) -> None:
-    """Point this Matrix room at a new thread (started by /openremote-control)."""
-    MatrixRoom.objects.filter(room_id=room_id).update(thread_id=thread_id)
-
-
 # ---------------------------------------------------------------------------
 # Allowlist check
 # ---------------------------------------------------------------------------
@@ -143,10 +137,9 @@ async def handle_message(
         # No pending prompt — treat as a chat message
         buffer = ""
         reply = ""
-        new_thread_id = None
 
         async def on_event(data):
-            nonlocal buffer, reply, new_thread_id
+            nonlocal buffer, reply
             etype = data.get("type")
             if etype == "message_delta":
                 buffer += data.get("text", "")
@@ -154,15 +147,10 @@ async def handle_message(
                 reply = data.get("text") or buffer
             elif etype == "slash_result":
                 reply = data.get("message", "")
-                if data.get("new_thread_id"):
-                    new_thread_id = data["new_thread_id"]
             elif etype == "error":
                 reply = f"Error: {data.get('message', '')}"
 
         await dispatch_text(thread, text, on_event=on_event)
-
-        if new_thread_id:
-            await _rebind_room(room_id, new_thread_id)
 
         if reply:
             await send(room_id, reply)

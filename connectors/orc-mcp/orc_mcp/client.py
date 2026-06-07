@@ -141,6 +141,18 @@ class OrcBackendClient:
 
     # -- public tools ------------------------------------------------------
 
+    def start_remote_control(self, name: str = "") -> str:
+        """Start a remote-control session and dispatch it to the operator's chat.
+
+        Returns the session name on success, or a '[…]' sentinel on failure.
+        """
+        try:
+            r = self._post("/api/connectors/start", {"name": name}, _POST_TIMEOUT)
+            r.raise_for_status()
+            return r.json().get("name") or name or "session"
+        except Exception:
+            return "[connector error]"
+
     def notify(self, message: str) -> bool:
         """Fire-and-forget progress to the user's chat. Best-effort."""
         try:

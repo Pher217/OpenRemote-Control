@@ -96,6 +96,79 @@ class TestConnectorAuth:
 
 
 # ---------------------------------------------------------------------------
+# start (the /openremote-control dispatch endpoint)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStart:
+    def test_start_creates_named_session_and_binds_connector(self, client, with_token):
+        """
+        GIVEN a valid connector token
+        WHEN POST /start with a session name
+        THEN 201 {ok, thread_id, name} is returned and the connector is bound to it
+        """
+        response = client.post(
+            f"{BASE}/start",
+            {
+                "connector_id": "conn-start-1",
+                "tool": "claude_code",
+                "workspace_root": "/home/user/project",
+                "name": "Nightly deploy",
+            },
+            format="json",
+            **AUTH,
+        )
+        assert response.status_code == 201
+        assert response.data["ok"] is True
+        assert response.data["name"] == "Nightly deploy"
+
+        instance = ConnectorInstance.objects.get(connector_id="conn-start-1")
+        assert str(instance.thread_id) == response.data["thread_id"]
+        assert instance.thread.name == "Nightly deploy"
+
+    def test_start_rebinds_existing_connector_to_new_thread(self, client, with_token):
+        """
+        GIVEN a connector already bound to a thread (via /notify)
+        WHEN POST /start is called
+        THEN the connector is rebound to a fresh thread
+        """
+        client.post(
+            f"{BASE}/notify",
+            {"connector_id": "conn-start-2", "tool": "claude_code", "message": "hi"},
+            format="json",
+            **AUTH,
+        )
+        first = ConnectorInstance.objects.get(connector_id="conn-start-2").thread_id
+
+        response = client.post(
+            f"{BASE}/start",
+            {"connector_id": "conn-start-2", "tool": "claude_code", "name": "Fresh"},
+            format="json",
+            **AUTH,
+        )
+        assert response.status_code == 201
+        rebound = ConnectorInstance.objects.get(connector_id="conn-start-2").thread_id
+        assert str(rebound) == response.data["thread_id"]
+        assert rebound != first
+
+    def test_start_auto_names_when_name_blank(self, client, with_token):
+        """
+        GIVEN no name in the body
+        WHEN POST /start
+        THEN the session gets an auto-generated name (non-empty)
+        """
+        response = client.post(
+            f"{BASE}/start",
+            {"connector_id": "conn-start-3", "tool": "claude_code"},
+            format="json",
+            **AUTH,
+        )
+        assert response.status_code == 201
+        assert response.data["name"]
+
+
+# ---------------------------------------------------------------------------
 # notify
 # ---------------------------------------------------------------------------
 

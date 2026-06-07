@@ -3,6 +3,7 @@ import logging
 from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.db.models import Max
+from django.utils import timezone
 
 from apps.accounts.models import Account
 from apps.connectors.models import ConnectorInstance
@@ -115,6 +116,53 @@ def _broadcast_text(text: str) -> None:
             async_to_sync(send_text)(matrix_room, text)
         except Exception:
             logger.exception("connector broadcast: matrix delivery failed (best-effort)")
+
+
+def start_session(
+    connector_id: str,
+    tool: str,
+    workspace_root: str,
+    name: str,
+) -> dict:
+    """Start a new remote-control session and dispatch it to the operator's chat.
+
+    This is the backend side of the universal `/openremote-control` command, which
+    is invoked from inside the coding agent (Claude Code / Codex / Cursor …) via the
+    orc-mcp bridge. It creates a fresh named thread for this connector, rebinds the
+    connector to it (so subsequent notify/ask/approve route to this session), and
+    announces it to the operator's messaging app(s) of choice.
+    """
+    account, _ = Account.objects.get_or_create(
+        provider=tool or "connector",
+        label="connector",
+        defaults={"auth_type": "none", "credential_type": "none"},
+    )
+
+    session_name = (name or "").strip() or f"{tool or 'session'} {timezone.now():%Y-%m-%d %H:%M}"
+
+    thread = Thread.objects.create(
+        name=session_name,
+        runtime=tool or "connector",
+        runtime_mode=Thread.RuntimeModeChoices.API,
+        account=account,
+    )
+
+    instance = ConnectorInstance.objects.filter(connector_id=connector_id).first()
+    if instance is None:
+        ConnectorInstance.objects.create(
+            connector_id=connector_id,
+            tool=tool,
+            workspace_root=workspace_root,
+            thread=thread,
+        )
+    else:
+        instance.thread = thread
+        instance.workspace_root = workspace_root or instance.workspace_root
+        instance.save(update_fields=["thread", "workspace_root", "last_seen_at"])
+
+    _broadcast_text(f"🎮 Remote-control session started: {session_name}")
+
+    return {"thread_id": str(thread.id), "name": session_name}
 
 
 def notify(

@@ -1,6 +1,7 @@
 """MCP server exposing the OpenRemote-Control supervision tools.
 
 Tools (the agent calls these; they route to the user's chat via the backend):
+  - openremote_control(name)        -> start a session, dispatch it to the user's chat app
   - notify(message)                 -> push progress to chat
   - ask_human(question, options)    -> ask the user; returns their answer
   - request_approval(action, preview) -> returns 'allow' | 'deny' (fail-closed)
@@ -25,6 +26,16 @@ def _serve() -> None:
 
     client = OrcBackendClient()
     mcp = FastMCP("orc")
+
+    @mcp.tool()
+    def openremote_control(name: str = "") -> str:
+        """Start an OpenRemote-Control session for this coding session and dispatch it to
+        the operator's messaging app of choice (Telegram, or WhatsApp/Slack/Signal via
+        Matrix), so they can supervise from their phone. Optionally pass a session name."""
+        result = client.start_remote_control(name)
+        if result.startswith("["):
+            return result
+        return f"Remote-control session dispatched to your chat: {result}"
 
     @mcp.tool()
     def notify(message: str) -> str:
