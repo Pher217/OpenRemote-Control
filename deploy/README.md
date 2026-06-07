@@ -14,39 +14,51 @@ Internet
    ▼
 ┌──────────────────────────────────────────────┐
 │  Caddy 2  (TLS termination, reverse proxy)   │
-│  - app.example.com      → web:8000           │
-│  - matrix.example.com   → synapse:8008       │
-│  - headscale.example.com→ headscale:8080     │
-│  - example.com/.well-known/matrix/*          │
-└────────┬────────────────┬────────────────────┘
-         │                │
-    orc_app network   orc_matrix network
-         │                │
-┌────────┴──────┐  ┌──────┴──────────────────────┐
-│  Django / DRF │  │  Synapse v1.154.0            │
-│  Gunicorn +   │  │  mautrix-whatsapp v26.05     │
-│  Uvicorn      │  │  mautrix-slack    v26.05     │
-│  Celery worker│  │  matrix-postgres             │
-│  Telegram bot │  └─────────────────────────────┘
-│  Matrix bot   │
-│  Session obs. │  ┌─────────────────────────────┐
-│  postgres:16  │  │  Headscale 0.24.2            │
-│  valkey:8     │  │  (orc_headscale network)     │
-└───────────────┘  └─────────────────────────────┘
+│  - app.example.com       → web:8000          │
+│  - headscale.example.com → headscale:8080    │
+└────────┬─────────────────────────────────────┘
+         │
+    orc_app network
+         │
+┌────────┴─────────────────────────────────────┐
+│  Django / DRF (Gunicorn + Uvicorn)           │
+│  Celery worker                               │
+│  Telegram bot         (run_telegram_bot)     │
+│  Session observer     (run_session_observer) │
+│  messaging-gateway    (Node.js sidecar)      │
+│    └─ WhatsApp (Baileys, unofficial — QR)    │
+│    └─ Slack    (Socket Mode bot)             │
+│    └─ Discord  (discord.js bot)              │
+│    └─ Signal   (via signal-cli-rest-api)     │
+│    └─ iMessage (via BlueBubbles on Mac)      │
+│  signal-cli-rest-api                         │
+│  postgres:16                                 │
+│  valkey:8                                    │
+└──────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────┐
+│  Headscale 0.24.2  (orc_headscale network)   │
+└──────────────────────────────────────────────┘
 
 2nd machine (developer workstation / CI runner)
   ├── orc-host daemon  (host-agent)
   └── orc-mcp bridge  (Cursor / Claude Code / etc.)
+
+Mac (separate machine — not a container)
+  └── BlueBubbles  (iMessage relay — optional)
 ```
 
 **Stacks** (each is an independent `docker compose` project):
 
 | Stack | Compose file | Network(s) |
 |---|---|---|
-| App | `deploy/app/docker-compose.yml` | `orc_app` |
-| Caddy | `deploy/caddy/docker-compose.yml` | joins `orc_app` + `orc_matrix` |
-| Matrix | `deploy/matrix/docker-compose.yml` | `orc_matrix` |
+| App + gateway | `deploy/app/docker-compose.yml` | `orc_app` |
+| Caddy | `deploy/caddy/docker-compose.yml` | joins `orc_app` + `orc_headscale` |
 | Headscale | `deploy/headscale/docker-compose.yml` | `orc_headscale` |
+
+> **Telegram** is handled by the backend's own `run_telegram_bot` management
+> command and does not need the gateway.  The gateway handles WhatsApp, Slack,
+> Discord, Signal, and iMessage.
 
 ---
 
@@ -61,18 +73,11 @@ Internet
 [ ] Tailscale or direct SSH access for ongoing management
 ```
 
-**DNS** — three A records pointing to your server's public IP:
+**DNS** — two A records pointing to your server's public IP:
 
 ```
 app.example.com        A  <server-ip>
-matrix.example.com     A  <server-ip>
 headscale.example.com  A  <server-ip>
-```
-
-If you want Matrix federation (other servers can reach yours), also add:
-
-```
-example.com            A  <server-ip>   (for /.well-known/matrix/*)
 ```
 
 ---
@@ -88,32 +93,32 @@ Minimum values to set before proceeding:
 
 ```
 SECRET_KEY            # python -c "import secrets; print(secrets.token_urlsafe(50))"
-APP_DOMAIN / MATRIX_DOMAIN / HS_DOMAIN / BASE_DOMAIN
+APP_DOMAIN / HS_DOMAIN
 POSTGRES_PASSWORD
-MATRIX_POSTGRES_PASSWORD
 ORC_CONNECTOR_TOKEN   # python -c "import secrets; print(secrets.token_hex(32))"
 ORC_ENROLL_SECRET     # python -c "import secrets; print(secrets.token_hex(32))"
+MESSAGING_GATEWAY_TOKEN  # python -c "import secrets; print(secrets.token_hex(32))"
 TELEGRAM_BOT_TOKEN    # from @BotFather
 TELEGRAM_ALLOWED_CHAT_IDS
 ORC_PROMPT_CHAT_ID
+ENABLED_PLATFORMS     # e.g. whatsapp,slack,signal
 ```
 
-Matrix / headscale values can be filled in later (steps 5 and 6); leave them as
-placeholders for now, or the matrix-bot will fail to connect (that's fine for
-the initial app bring-up).
+Messaging-platform tokens (Slack, Discord, Signal, iMessage) can be filled in
+after the stack is up; the gateway skips any platform not in `ENABLED_PLATFORMS`.
 
 ---
 
 ## 3. Bring Up the App Stack
 
-### 3a. Build the Django image
+### 3a. Build the Django + gateway images
 
 ```bash
 docker compose -f deploy/app/docker-compose.yml build
 ```
 
-This runs `collectstatic` at build time using the `build-placeholder` SECRET_KEY.
-Static files are baked into the image — no volume needed.
+This compiles the Django image (collectstatic at build time, baked in) and the
+`orc-messaging-gateway` Node.js image.
 
 ### 3b. Run migrations
 
@@ -121,8 +126,7 @@ Static files are baked into the image — no volume needed.
 docker compose -f deploy/app/docker-compose.yml run --rm migrate
 ```
 
-The `migrate` service runs `python manage.py migrate --noinput` against
-`postgres` (started automatically as a dependency) and exits.
+The `migrate` service runs `python manage.py migrate --noinput` and exits.
 
 ### 3c. Start all app services
 
@@ -131,9 +135,7 @@ docker compose -f deploy/app/docker-compose.yml up -d
 ```
 
 Services started: `postgres`, `valkey`, `web`, `worker`, `telegram-bot`,
-`matrix-bot`, `session-observer`.
-
-`matrix-bot` will log connection errors until you finish step 5 — that's normal.
+`session-observer`, `messaging-gateway`, `signal-cli-rest-api`.
 
 ### 3d. Create a Django superuser
 
@@ -149,298 +151,220 @@ docker compose -f deploy/app/docker-compose.yml \
 curl -s http://localhost:8000/health/
 # Expected: HTTP 200
 
-# Logs
-docker compose -f deploy/app/docker-compose.yml logs -f web
+# Gateway logs
+docker compose -f deploy/app/docker-compose.yml logs -f messaging-gateway
 ```
 
 ---
 
 ## 4. Bring Up Caddy (TLS)
 
-Caddy reads `APP_DOMAIN`, `MATRIX_DOMAIN`, `HS_DOMAIN`, and `BASE_DOMAIN` from
-the `.env` file at startup.
+Caddy reads `APP_DOMAIN` and `HS_DOMAIN` from the `.env` file at startup.
 
-**Caddy must join both `orc_app` and `orc_matrix` networks.** Both networks must
-already exist (they are created by the app and matrix stacks). Start Caddy after
-the app stack is up; it can be started before or after the matrix stack.
+**Caddy must join `orc_app` and `orc_headscale`.** Both networks must already
+exist (created by the app and headscale stacks). Start Caddy after step 3.
 
 ```bash
 docker compose -f deploy/caddy/docker-compose.yml up -d
 ```
 
-Caddy will obtain TLS certificates from Let's Encrypt on first startup. Watch
-the logs to confirm:
+Verify TLS:
 
 ```bash
 docker compose -f deploy/caddy/docker-compose.yml logs -f caddy
 # Look for: "certificate obtained successfully"
-```
 
-Verify HTTPS:
-
-```bash
 curl -s https://<APP_DOMAIN>/health/
 # Expected: HTTP 200
 ```
 
 ---
 
-## 5. Matrix Homeserver + Bridges
+## 5. Messaging Gateway — Per-Platform Setup
 
-> **Order is critical.** Follow each step before moving to the next.
+The gateway is a Node.js sidecar that polls the backend's `/api/gateway/outbox`
+and forwards outbound messages to each enabled platform, then POSTs inbound
+messages to `/api/gateway/inbound`.  It authenticates with `MESSAGING_GATEWAY_TOKEN`.
 
-### 5a. Generate Synapse config
+Only platforms listed in `ENABLED_PLATFORMS` are started; the gateway logs a
+skip message for disabled platforms.
 
-```bash
-# Create the data directory that Synapse expects
-mkdir -p deploy/matrix/synapse/data/appservices
+### 5a. WhatsApp (Baileys — unofficial multi-device protocol)
 
-# Generate homeserver.yaml (runs generate mode, writes to the mounted volume)
-docker run --rm \
-  -v "$(pwd)/deploy/matrix/synapse/data:/data" \
-  -e SYNAPSE_SERVER_NAME=<MATRIX_DOMAIN> \
-  -e SYNAPSE_REPORT_STATS=no \
-  matrixdotorg/synapse:v1.154.0 generate
-```
+> **Risk notice:** Baileys uses the WhatsApp Web multi-device protocol, which is
+> not the official Cloud API.  Account bans are possible (rare in practice for
+> low-volume personal use, but not zero).  Do not use a primary business number.
 
-### 5b. Configure homeserver.yaml
+The gateway handles the QR scan automatically on first start.
 
-```bash
-$EDITOR deploy/matrix/synapse/data/homeserver.yaml
-```
+1. Watch the gateway logs at startup:
 
-Apply these changes (use `deploy/matrix/synapse/homeserver.sample.yaml` as reference):
-
-1. Change the `database:` block from SQLite to PostgreSQL:
-   ```yaml
-   database:
-     name: psycopg2
-     txn_limit: 10000
-     args:
-       user: synapse
-       password: "<MATRIX_POSTGRES_PASSWORD>"   # from .env
-       database: synapse
-       host: matrix-postgres
-       port: 5432
-       cp_min: 5
-       cp_max: 10
-   ```
-
-2. Set `enable_registration: false`
-
-3. Add a `registration_shared_secret`:
    ```bash
-   # Generate one:
-   openssl rand -hex 32
-   ```
-   ```yaml
-   registration_shared_secret: "<the-hex-string>"
+   docker compose -f deploy/app/docker-compose.yml logs -f messaging-gateway
    ```
 
-4. Add the appservices list (bridges will write their files here):
-   ```yaml
-   app_service_config_files:
-     - /data/appservices/whatsapp-registration.yaml
-     - /data/appservices/slack-registration.yaml
-   ```
+2. A QR code is printed in the logs as ASCII art.
 
-5. Ensure `x_forwarded: true` under the listener (already set by `generate`
-   in recent Synapse versions — confirm it is present).
+3. On your phone: **WhatsApp → Settings → Linked Devices → Link a Device**.
+   Scan the QR.
 
-### 5c. Start Synapse + matrix-postgres
+4. Auth state is persisted in the `messaging_gateway_data` Docker volume under
+   `/app/data/whatsapp/`.  You will only need to re-scan if the session is
+   revoked.
 
-```bash
-docker compose -f deploy/matrix/docker-compose.yml up -d matrix-postgres synapse
+Set the prompt recipient in `.env`:
+
+```
+ORC_PROMPT_WHATSAPP=+41791234567   # international format
 ```
 
-Wait for Synapse to be healthy:
+### 5b. Slack (Socket Mode bot)
 
-```bash
-docker compose -f deploy/matrix/docker-compose.yml logs -f synapse
-# Look for: "Synapse now listening on ..."
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App →
+   **From scratch**.
+
+2. In **Socket Mode**, enable Socket Mode and generate an **App-Level Token**
+   with scope `connections:write` → copy to `SLACK_APP_TOKEN`.
+
+3. In **OAuth & Permissions**, add Bot Token Scopes:
+   `chat:write`, `im:history`, `im:read`, `im:write`, `channels:history`
+
+4. Install the app to your workspace → copy the **Bot User OAuth Token** to
+   `SLACK_BOT_TOKEN`.
+
+5. In **Event Subscriptions** → subscribe to bot events: `message.im`,
+   `message.channels`.
+
+6. Invite the bot to the channel or DM where prompts should appear.
+
+Set the prompt recipient in `.env`:
+
+```
+ORC_PROMPT_SLACK=C01234ABCDE   # channel ID or U01234ABCDE user ID
 ```
 
-### 5d. Register the ORC bot user + your operator account
-
-Replace `<REGISTRATION_SHARED_SECRET>` with the value you set in step 5b.
+Restart the gateway after updating `.env`:
 
 ```bash
-# Register the ORC bot (the account matrix-bot logs in as)
-docker compose -f deploy/matrix/docker-compose.yml exec synapse \
-  register_new_matrix_user \
-  -u orc \
-  -p "<strong-password>" \
-  -a \
-  -c /data/homeserver.yaml \
-  http://localhost:8008
-
-# Register yourself as operator
-docker compose -f deploy/matrix/docker-compose.yml exec synapse \
-  register_new_matrix_user \
-  -u <your-username> \
-  -p "<strong-password>" \
-  -a \
-  -c /data/homeserver.yaml \
-  http://localhost:8008
+docker compose -f deploy/app/docker-compose.yml restart messaging-gateway
 ```
 
-### 5e. Get the ORC bot's Matrix access token
+### 5c. Discord (discord.js bot)
+
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
+   → New Application → Bot.
+
+2. Enable **Message Content Intent** under Privileged Gateway Intents.
+
+3. Copy the **Bot Token** to `DISCORD_TOKEN`.
+
+4. Invite the bot to your server with scopes `bot` and permission `Send Messages`.
+   Invite URL format:
+   `https://discord.com/api/oauth2/authorize?client_id=<CLIENT_ID>&permissions=2048&scope=bot`
+
+5. Get the target channel ID: right-click the channel → **Copy Channel ID**
+   (requires Developer Mode: User Settings → Advanced → Developer Mode).
+
+Set the prompt recipient in `.env`:
+
+```
+ORC_PROMPT_DISCORD=1234567890123456789
+```
+
+### 5d. Signal (via signal-cli-rest-api)
+
+The `signal-cli-rest-api` container ([bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api))
+provides a JSON-RPC HTTP API around the Java Signal client.
+
+**Register or link a number** (choose one):
+
+**Option A — Register a new number** (requires an SMS or voice verification):
 
 ```bash
-curl -s -X POST \
-  "https://<MATRIX_DOMAIN>/_matrix/client/v3/login" \
+# Replace +41791234567 with the number you want to register
+curl -X POST "http://localhost:8080/v1/register/+41791234567" \
   -H "Content-Type: application/json" \
-  -d '{
-    "type": "m.login.password",
-    "identifier": {"type": "m.id.user", "user": "orc"},
-    "password": "<strong-password>"
-  }' | python3 -m json.tool
+  -d '{"use_voice": false}'
+
+# Then verify with the SMS code you received
+curl -X POST "http://localhost:8080/v1/register/+41791234567/verify/123456"
 ```
 
-Copy the `access_token` value from the response and set it in `deploy/.env`:
+**Option B — Link an existing Signal account** (link as a secondary device):
 
 ```bash
-MATRIX_ACCESS_TOKEN=<the-token>
+# Get a linking URI
+curl "http://localhost:8080/v1/qrcodelink?device_name=orc-server"
+# Scan the QR code with your Signal mobile app
+# (Settings → Linked Devices → Link New Device)
 ```
 
-### 5f. Create a room and get its ID
+After registration/linking, the account data is persisted in the `signal_cli_data`
+volume.
 
-Use a Matrix client (Element, Cinny, etc.) logged in as your operator account,
-or use the API:
+> The signal-cli-rest-api port (8080) is not published to the host — the gateway
+> reaches it at `http://signal-cli-rest-api:8080` inside the `orc_app` network.
+> Expose it temporarily for setup commands by adding `ports: ["127.0.0.1:8080:8080"]`
+> to the `signal-cli-rest-api` service, then remove the port after setup.
 
-```bash
-curl -s -X POST \
-  "https://<MATRIX_DOMAIN>/_matrix/client/v3/createRoom" \
-  -H "Authorization: Bearer <OPERATOR_ACCESS_TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "ORC Control",
-    "preset": "private_chat",
-    "invite": ["@orc:<MATRIX_DOMAIN>"]
-  }' | python3 -m json.tool
-```
-
-Copy the `room_id` (format: `!abc123:<MATRIX_DOMAIN>`) and set in `deploy/.env`:
-
-```bash
-MATRIX_ALLOWED_ROOMS=!<room-id>:<MATRIX_DOMAIN>
-ORC_PROMPT_MATRIX_ROOM=!<room-id>:<MATRIX_DOMAIN>
-MATRIX_APPROVED_MXIDS=@<your-username>:<MATRIX_DOMAIN>
-```
-
-### 5g. Generate bridge configs and registration files
-
-**WhatsApp bridge:**
-
-```bash
-# Copy sample config to the data directory
-cp deploy/matrix/whatsapp/config.sample.yaml deploy/matrix/whatsapp/config.yaml
-$EDITOR deploy/matrix/whatsapp/config.yaml
-# Set: homeserver.domain, appservice.address, bridge.permissions operator MXID
-
-# Generate registration.yaml (one-shot run)
-docker compose -f deploy/matrix/docker-compose.yml run --rm whatsapp-bridge
-```
-
-**Slack bridge:**
-
-```bash
-cp deploy/matrix/slack/config.sample.yaml deploy/matrix/slack/config.yaml
-$EDITOR deploy/matrix/slack/config.yaml
-# Set: homeserver.domain, appservice.address, bridge.permissions operator MXID
-
-docker compose -f deploy/matrix/docker-compose.yml run --rm slack-bridge
-```
-
-### 5h. Wire registration files into Synapse
-
-```bash
-cp deploy/matrix/whatsapp/registration.yaml \
-   deploy/matrix/synapse/data/appservices/whatsapp-registration.yaml
-
-cp deploy/matrix/slack/registration.yaml \
-   deploy/matrix/synapse/data/appservices/slack-registration.yaml
-```
-
-Restart Synapse to pick up the appservice registrations:
-
-```bash
-docker compose -f deploy/matrix/docker-compose.yml restart synapse
-```
-
-Verify Synapse loaded both:
-
-```bash
-docker compose -f deploy/matrix/docker-compose.yml logs synapse | grep -i appservice
-# Expected: "Loaded 2 appservices"
-```
-
-### 5i. Start the bridges
-
-```bash
-docker compose -f deploy/matrix/docker-compose.yml up -d whatsapp-bridge slack-bridge
-```
-
-### 5j. Link WhatsApp (QR login)
-
-> mautrix-whatsapp uses your **personal WhatsApp account** via the multi-device
-> QR code — not the WhatsApp Cloud API. You are scanning the same QR code you'd
-> scan in WhatsApp Web. One phone, one active session.
-
-In your Matrix client (logged in as your operator account), open a DM with
-`@whatsappbot:<MATRIX_DOMAIN>` and send:
+Set the prompt recipient in `.env`:
 
 ```
-!wa login
+SIGNAL_API_URL=http://signal-cli-rest-api:8080
+SIGNAL_NUMBER=+41791234567   # the registered/linked number
+ORC_PROMPT_SIGNAL=+41791234567
 ```
 
-The bridge will reply with a QR code image. Scan it with WhatsApp on your phone
-(Settings → Linked Devices → Link a Device). Once linked, confirm in the DM.
+> **Risk notice:** Signal does not have an official third-party API.
+> signal-cli uses the Signal protocol directly.  Account bans are rare for
+> personal use but possible if traffic patterns are unusual.
 
-Enable relay mode in the groups you want bridged:
+### 5e. iMessage (via BlueBubbles — Mac only)
+
+iMessage requires Apple hardware running macOS with the Messages app.
+BlueBubbles ([bluebubbles.app](https://bluebubbles.app)) runs on that Mac and
+exposes a REST API + webhook.  It does NOT run as a Docker container.
+
+**On your Mac:**
+
+1. Download and install BlueBubbles from [bluebubbles.app/install](https://bluebubbles.app/install/).
+
+2. Open BlueBubbles → go through initial setup:
+   - Set a server password → copy to `BLUEBUBBLES_PASSWORD`
+   - Note the server URL (e.g. `http://192.168.1.x:1234`) → copy to `BLUEBUBBLES_URL`
+
+3. In BlueBubbles → **Settings → Webhooks**, add a new webhook pointing at
+   the gateway's webhook port on the server.  The Mac must reach the server
+   via the Headscale mesh (or direct LAN):
+
+   ```
+   http://<server-tailscale-ip>:<IMESSAGE_WEBHOOK_PORT>
+   ```
+
+   The default `IMESSAGE_WEBHOOK_PORT` is 3001.
+
+4. The gateway binds `IMESSAGE_WEBHOOK_PORT` on all interfaces inside its
+   container.  Do NOT expose this port via Caddy — it should only be
+   reachable from the Mac over the Headscale/Tailscale mesh or your LAN.
+
+Set the prompt recipient in `.env`:
 
 ```
-!wa set-relay
-```
-
-This makes the bridge forward messages from non-linked Matrix users into
-WhatsApp using the relay format defined in `config.yaml`.
-
-### 5k. Link Slack
-
-In a DM with `@slackbot:<MATRIX_DOMAIN>`:
-
-```
-!slack login
-```
-
-Follow the OAuth flow that the bridge presents. After linking, use
-`!slack set-relay` in any bridged room.
-
-### 5l. Restart matrix-bot with final .env
-
-```bash
-docker compose -f deploy/app/docker-compose.yml restart matrix-bot
-```
-
-Verify it connects:
-
-```bash
-docker compose -f deploy/app/docker-compose.yml logs -f matrix-bot
-# Expected: no connection errors, bot joins the room
+BLUEBUBBLES_URL=http://192.168.1.x:1234
+BLUEBUBBLES_PASSWORD=change-me
+IMESSAGE_WEBHOOK_PORT=3001
+ORC_PROMPT_IMESSAGE=+41791234567
 ```
 
 ---
 
 ## 6. Headscale + Join the 2nd Machine
 
-Headscale needs the Caddy stack running first so `HS_DOMAIN` is accessible over
-HTTPS (headscale clients need TLS).
+Headscale needs Caddy running first so `HS_DOMAIN` is accessible over HTTPS.
 
 ### 6a. Start Headscale
 
 ```bash
-# Edit the server_url in config.yaml to match your HS_DOMAIN
 sed -i "s|https://headscale.example.com|https://<HS_DOMAIN>|g" \
   deploy/headscale/config.yaml
 
@@ -458,20 +382,16 @@ curl -s https://<HS_DOMAIN>/health
 ### 6b. Create a Headscale user and pre-auth key
 
 ```bash
-# Create a user (logical grouping for your nodes)
 docker compose -f deploy/headscale/docker-compose.yml exec headscale \
   headscale users create orc
 
-# Create a reusable pre-auth key (expires in 24h; use --ephemeral for one-time)
 docker compose -f deploy/headscale/docker-compose.yml exec headscale \
   headscale preauthkeys create --user orc --reusable --expiration 24h
 ```
 
-Copy the key. You'll use it on every machine that joins the mesh.
+Copy the key for step 6c.
 
-### 6c. Join the 2nd machine (developer workstation / CI runner)
-
-On the 2nd machine, install Tailscale (standard package):
+### 6c. Join the 2nd machine
 
 ```bash
 # Linux
@@ -481,8 +401,6 @@ curl -fsSL https://tailscale.com/install.sh | sh
 brew install tailscale
 ```
 
-Point it at your Headscale server:
-
 ```bash
 sudo tailscale up \
   --login-server https://<HS_DOMAIN> \
@@ -490,36 +408,23 @@ sudo tailscale up \
   --hostname dev-workstation
 ```
 
-The server's backend will be reachable inside the mesh as
-`web.<user>.mesh.internal` (or by its Tailscale IP).
-
 ---
 
 ## 7. Install + Run the Host-Agent Daemon (2nd Machine)
 
-The host-agent daemon ships in `host-agent/` in this repo. It registers the
-machine as a controllable host and tails live session output.
-
 ```bash
-# Install (pipx keeps it isolated)
 pipx install ./host-agent
 
-# Enroll this machine with the backend
-# Use the mesh address or direct address of the backend
 orc-host enroll \
   --backend http://web.<user>.mesh.internal:8000 \
   --secret <ORC_ENROLL_SECRET>
 
-# Start the daemon (runs in the foreground; use a service manager or tmux)
 orc-host daemon --runtimes claude_code,codex
 ```
 
-`--runtimes` is a comma-separated list matching `OBSERVE_RUNTIMES` in `.env`.
-
-To run as a systemd service:
+Systemd unit:
 
 ```bash
-# Adjust paths as needed
 sudo tee /etc/systemd/system/orc-host.service <<'EOF'
 [Unit]
 Description=OpenRemote Control host-agent daemon
@@ -543,21 +448,18 @@ sudo systemctl enable --now orc-host
 
 ## 8. Install the Universal MCP Bridge (Client Machine)
 
-The MCP bridge (`connectors/orc-mcp`) exposes ORC as an MCP server that
-Cursor, Claude Code, or any MCP-compatible IDE can connect to.
-
 ```bash
 pipx install ./connectors/orc-mcp
 ```
 
-Set environment variables (add to shell profile or pass per-command):
+Set environment variables:
 
 ```bash
 export ORC_BACKEND_URL=https://<APP_DOMAIN>
-export ORC_CONNECTOR_TOKEN=<ORC_CONNECTOR_TOKEN>   # from deploy/.env
+export ORC_CONNECTOR_TOKEN=<ORC_CONNECTOR_TOKEN>
 ```
 
-**Claude Code (claude CLI):**
+**Claude Code:**
 
 ```bash
 claude mcp add orc -- orc-mcp
@@ -579,9 +481,6 @@ claude mcp add orc -- orc-mcp
 }
 ```
 
-Restart Cursor after saving. Verify the MCP server appears in the Cursor MCP
-panel (Settings → MCP).
-
 ---
 
 ## 9. End-to-End Verification
@@ -594,12 +493,17 @@ panel (Settings → MCP).
    `ask_human`. A prompt should appear in the Telegram chat.
 4. Reply in Telegram. Confirm the tool call resumes.
 
-### 9b. Matrix → Approval prompt
+### 9b. Gateway platform → Approval prompt
 
-1. In your Matrix client, send a message in the ORC Control room.
-2. Confirm the ORC bot (`@orc`) responds.
-3. Trigger an `ask_human` from a tool call.
-4. Confirm the prompt appears in the room and the response is forwarded back.
+1. Confirm the gateway is running and the target platform is in `ENABLED_PLATFORMS`.
+
+   ```bash
+   docker compose -f deploy/app/docker-compose.yml logs messaging-gateway | head -30
+   ```
+
+2. Trigger an `ask_human` from a tool call.
+3. Confirm the prompt appears on the configured platform (`ORC_PROMPT_*`) and
+   the response is forwarded back to the backend.
 
 ### 9c. Session observer
 
@@ -612,51 +516,55 @@ live output tailing.
 ## Troubleshooting
 
 **`migrate` service exits with error:**
-- Check postgres is healthy: `docker compose -f deploy/app/docker-compose.yml ps`
+- Check postgres: `docker compose -f deploy/app/docker-compose.yml ps`
 - Check logs: `docker compose -f deploy/app/docker-compose.yml logs postgres`
 
 **`web` healthcheck fails:**
-- `/health/` endpoint not yet merged — ensure you're on a branch where Opus has
-  added it. Temporarily change the healthcheck to `CMD true` to confirm the
-  rest of the stack works.
+- Temporarily change the healthcheck to `CMD true` to confirm the rest of the
+  stack works, then investigate the `/health/` endpoint.
 
-**Caddy: `certificate obtained: false` / ACME errors:**
+**Caddy: ACME / certificate errors:**
 - DNS must propagate before Caddy can get a cert. Wait and retry.
-- Check ports 80/443 are open: `curl http://<server-ip>` from an external machine.
+- Check ports 80/443 are open from the outside.
 
-**Synapse: "Failed to load appservice" on startup:**
-- Confirm the registration YAML files are in `deploy/matrix/synapse/data/appservices/`.
-- Check the paths in `homeserver.yaml` match the container-internal path `/data/appservices/...`.
+**Gateway: WhatsApp QR not appearing:**
+- Confirm `whatsapp` is in `ENABLED_PLATFORMS`.
+- Check gateway logs: `docker compose -f deploy/app/docker-compose.yml logs -f messaging-gateway`
+- Delete the auth state volume and restart to force a fresh QR:
+  `docker volume rm orc_messaging_gateway_data`
 
-**Matrix bot: login errors:**
-- Double-check `MATRIX_ACCESS_TOKEN` in `.env` — token is per-device and
-  invalidated on logout.
-- Re-run the login `curl` in step 5e and update `.env`.
+**Gateway: Slack / Discord not connecting:**
+- Verify tokens in `.env`. Restart after any `.env` change:
+  `docker compose -f deploy/app/docker-compose.yml restart messaging-gateway`
 
-**WhatsApp bridge: QR code expires:**
-- Send `!wa logout` then `!wa login` again in the DM.
+**signal-cli-rest-api: account not registered:**
+- Temporarily publish port 8080 for setup (see step 5d), run the register/link
+  commands, then remove the port mapping and restart.
 
-**Headscale: machine not appearing after `tailscale up`:**
-- Confirm the pre-auth key is still valid: `headscale preauthkeys list --user orc`
-- Check headscale logs: `docker compose -f deploy/headscale/docker-compose.yml logs`
+**Headscale: machine not appearing:**
+- Confirm the pre-auth key is still valid:
+  `headscale preauthkeys list --user orc`
 
 ---
 
 ## Security Notes
 
-- **Single shared token:** `ORC_CONNECTOR_TOKEN` is a shared secret. Rotate it
-  by updating `.env` and restarting `web`, `worker`, and all client installs.
-- **Bridge puppets are untrusted.** Never add the WhatsApp or Slack bridge puppet
-  MXIDs (e.g. `@whatsapp_+1234:matrix.example.com`) to `MATRIX_APPROVED_MXIDS`.
-  Those are relay proxies, not verified operators.
-- **WhatsApp = personal account via QR.** The bridge uses your phone's WhatsApp
-  session. If your phone is offline or the session is invalidated, the bridge
-  drops. This is inherent to the multi-device protocol — it is not the
-  WhatsApp Business Cloud API.
+- **`MESSAGING_GATEWAY_TOKEN`** authenticates the gateway to the backend.
+  Treat it like a password — rotate by updating `.env` and restarting both
+  `web` and `messaging-gateway`.
+- **`ORC_CONNECTOR_TOKEN`** is the shared secret for host-agents and MCP
+  connectors. Rotate by updating `.env` and restarting `web`, `worker`, and
+  all client installs.
+- **WhatsApp / Signal use unofficial protocols.**  Both platforms can ban
+  accounts for API-like usage.  Use dedicated numbers, keep volume low, and
+  accept that sessions may require periodic re-linking.
+- **iMessage webhook port** must NOT be exposed publicly.  Bind it only on
+  the Tailscale/Headscale interface.  The gateway's `IMESSAGE_WEBHOOK_PORT`
+  port in the compose file is intentionally not published to `0.0.0.0`.
+- **BlueBubbles requires a Mac** you control with iMessage signed in.  It
+  cannot run on a Linux server.
 - **`SECURE_PROXY_SSL_HEADER`** must be set so Django enforces HTTPS-only
-  cookies behind Caddy. Without it, `SESSION_COOKIE_SECURE` has no effect.
+  cookies behind Caddy.
 - **Postgres passwords:** use `openssl rand -hex 24` for each.
-- **No federation by default:** `enable_registration: false` and no public
-  federation. The Matrix homeserver is private.
-- **Headscale ACL:** `policy.hujson` is allow-all. Restrict it once your node
-  list is stable.
+- **Headscale ACL:** `policy.hujson` is allow-all by default. Restrict it
+  once your node list is stable.

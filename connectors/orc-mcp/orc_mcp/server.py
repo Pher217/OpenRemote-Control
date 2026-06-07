@@ -30,8 +30,8 @@ def _serve() -> None:
     @mcp.tool()
     def openremote_control(name: str = "") -> str:
         """Start an OpenRemote-Control session for this coding session and dispatch it to
-        the operator's messaging app of choice (Telegram, or WhatsApp/Slack/Signal via
-        Matrix), so they can supervise from their phone. Optionally pass a session name."""
+        the operator's messaging app of choice (Telegram, WhatsApp, Slack, Signal, or
+        iMessage), so they can supervise from their phone. Optionally pass a session name."""
         result = client.start_remote_control(name)
         if result.startswith("["):
             return result
