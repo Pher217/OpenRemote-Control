@@ -8,6 +8,7 @@ from orc_mcp.client import OrcBackendClient
 
 
 def _make(handler, **kw):
+    # _signing_identity=None: suppress filesystem load so bearer fallback is exercised.
     return OrcBackendClient(
         base_url="http://test",
         token="tok",
@@ -15,6 +16,7 @@ def _make(handler, **kw):
         tool="claude",
         poll_interval=0,
         transport=httpx.MockTransport(handler),
+        _signing_identity=None,
         **kw,
     )
 

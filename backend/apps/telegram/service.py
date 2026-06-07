@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from channels.db import database_sync_to_async
 from django.conf import settings
+from django.utils import timezone
 
 from apps.accounts.models import Account
 from apps.prompts.service import resolve as resolve_prompt
@@ -45,8 +48,30 @@ def _rebind_chat(chat_id, thread_id) -> None:
     TelegramChat.objects.filter(chat_id=chat_id).update(thread_id=thread_id)
 
 
+@database_sync_to_async
+def _create_pairing(tool: str, label: str, ttl: int = 900):
+    """Create a Pairing row and return (code, expires_at)."""
+    from apps.connectors.models import Pairing
+
+    now = timezone.now()
+    pairing = Pairing.objects.create(
+        tool=tool,
+        label=label,
+        expires_at=now + timedelta(seconds=ttl),
+    )
+    return pairing.code, pairing.expires_at
+
+
 async def handle_update(chat_id: int, text: str, *, send):
     if chat_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
+        return
+
+    # /pair [tool] [label] — create a pairing code and send the QR image.
+    if text.strip().startswith("/pair"):
+        parts = text.strip().split(maxsplit=3)
+        tool = parts[1] if len(parts) > 1 else ""
+        label = parts[2] if len(parts) > 2 else ""
+        await _handle_pair_command(chat_id, tool, label)
         return
 
     thread = await database_sync_to_async(get_or_create_thread_for_chat)(chat_id)
@@ -104,3 +129,31 @@ async def handle_callback_query(
         await answer(callback_query_id, text="Expired or already answered.")
     else:
         await answer(callback_query_id, text="Recorded ✔")
+
+
+async def _handle_pair_command(chat_id: int, tool: str, label: str) -> None:
+    """Create a pairing code and send the QR PNG to the Telegram chat."""
+    from apps.connectors.qr import pairing_payload, png_bytes
+    from apps.telegram.telegram_api import send_message, send_photo
+
+    code, expires_at = await _create_pairing(tool, label)
+    backend_url = getattr(settings, "ORC_PUBLIC_BASE_URL", "")
+    payload = pairing_payload(code, backend_url)
+
+    try:
+        png = png_bytes(payload)
+        cmd = f"orc-mcp pair {code}"
+        if backend_url:
+            cmd += f" --backend {backend_url}"
+        caption = f"Pairing code: {code}\nExpires: {expires_at.strftime('%H:%M UTC')}\n\n{cmd}"
+        await send_photo(chat_id, png, caption=caption)
+    except Exception:
+        # Fallback to text if photo send fails (e.g. no bot permission to send media).
+        cmd = f"orc-mcp pair {code}"
+        if backend_url:
+            cmd += f" --backend {backend_url}"
+        await send_message(
+            chat_id,
+            f"Pairing code: `{code}`\nExpires: {expires_at.strftime('%H:%M UTC')}\n\nRun: `{cmd}`",
+            parse_mode="Markdown",
+        )

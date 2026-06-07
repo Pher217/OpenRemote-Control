@@ -81,6 +81,27 @@ async def answer_callback_query(
         resp.raise_for_status()
 
 
+async def send_photo(
+    chat_id,
+    png: bytes,
+    caption: str = "",
+    message_thread_id=None,
+) -> None:
+    """Send a PNG image to a Telegram chat (used for QR pairing codes)."""
+    payload = {"chat_id": str(chat_id)}
+    if message_thread_id is not None:
+        payload["message_thread_id"] = str(message_thread_id)
+    if caption:
+        payload["caption"] = caption
+    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/sendPhoto",
+            data=payload,
+            files={"photo": ("qr.png", png, "image/png")},
+        )
+        resp.raise_for_status()
+
+
 async def get_updates(offset, timeout=50):
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=5.0, read=timeout + 10, write=5.0, pool=5.0)
