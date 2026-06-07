@@ -39,6 +39,12 @@ def _get_thread_with_account(thread_id) -> Thread:
     return Thread.objects.select_related("account").get(id=thread_id)
 
 
+@database_sync_to_async
+def _rebind_chat(chat_id, thread_id) -> None:
+    """Point this Telegram chat at a new thread (started by /openremote-control)."""
+    TelegramChat.objects.filter(chat_id=chat_id).update(thread_id=thread_id)
+
+
 async def handle_update(chat_id: int, text: str, *, send):
     if chat_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
         return
@@ -48,9 +54,10 @@ async def handle_update(chat_id: int, text: str, *, send):
 
     buffer = ""
     reply = ""
+    new_thread_id = None
 
     async def on_event(data):
-        nonlocal buffer, reply
+        nonlocal buffer, reply, new_thread_id
         etype = data.get("type")
         if etype == "message_delta":
             buffer += data.get("text", "")
@@ -58,10 +65,15 @@ async def handle_update(chat_id: int, text: str, *, send):
             reply = data.get("text") or buffer
         elif etype == "slash_result":
             reply = data.get("message", "")
+            if data.get("new_thread_id"):
+                new_thread_id = data["new_thread_id"]
         elif etype == "error":
             reply = f"⚠️ {data.get('message', '')}"
 
     await dispatch_text(thread, text, on_event=on_event)
+
+    if new_thread_id:
+        await _rebind_chat(chat_id, new_thread_id)
 
     if reply:
         await send(chat_id, reply)

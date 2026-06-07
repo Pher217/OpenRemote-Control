@@ -1,7 +1,8 @@
 # orc-mcp — OpenRemote-Control universal MCP bridge
 
-Install this MCP server into **any MCP-capable coding tool** and the agent can reach
-your chat (Telegram/Matrix) through your sovereign OpenRemote-Control backend:
+`orc-mcp` is purely a **dispatch tool**: install this MCP server into **any MCP-capable
+coding tool** and the agent gains three calls that route through your sovereign
+OpenRemote-Control backend into the chat app you already use (Telegram/Matrix):
 
 - `notify(message)` — push progress to your chat.
 - `ask_human(question, options)` — ask you a question; the agent waits for your reply.
