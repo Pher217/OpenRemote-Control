@@ -1,53 +1,137 @@
 # OpenRemote Control
 
-> Private, local-first cockpit for supervising AI agents across machines, projects, and runtimes — one mobile-first inbox where every coding CLI, model API, voice agent, or business agent appears as a thread, controllable with universal slash commands, with parallel sessions across multiple machines and accounts.
+> A self-hosted control plane for the AI coding agents you already run — Claude Code, Codex, Gemini, and any MCP tool like Cursor or Copilot, across all your machines — routed into one Telegram/Matrix inbox you supervise from your phone.
 
-**Status:** Phase 1 backend implementation in progress. Django scaffold, models, API layer, audit signals, policy permissions, WebSocket consumer, and Celery tasks are implemented with 72 passing tests.
+AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard.
 
-## What this is
+OpenRemote Control turns every agent session into a chat thread. Agents **notify** you, **ask** you questions, and **request approval** — and you answer once, from Telegram or Matrix, without hunting down the right machine, terminal, or editor.
 
-A control plane that sits above existing AI agent runtimes — Claude (via Agent SDK or CLI), Codex, Ollama, OpenCode, Aider — and exposes them through one unified chat UX (PWA + Telegram), with policy, approval, and audit layers built in.
+It's sovereign by design: you host it, your sessions and credentials never leave your infrastructure, and it reaches your tools through official SDKs and the open Model Context Protocol — never browser scraping or vendor hacks.
 
-Defining characteristics:
+## How it works
 
-- **Multi-host** — your MacBook, your Windows workstation, your Linux VPS, all in one fleet
-- **Multi-account per provider** — separate Anthropic accounts for personal vs. Schatzi work, each scoped per thread
-- **Policy engine** — sensitivity-aware project profiles that block cloud agents on confidential repos before launch
-- **Mobile-first approval inbox** — risk-tiered approvals via push, not a terminal viewer
-- **Queryable audit log** — append-only Postgres across heterogeneous runtimes
-- **Two surfaces, one backend** — PWA (Add to Home Screen) and Telegram bot, both backed by the same Django + Channels backend
+```
+   Agents & machines                OpenRemote Control              Your chat
+ ─────────────────────────        ────────────────────────       ───────────────
+ Claude Code / Codex / Gemini ─▶  observe → threads               Telegram
+ host-agent (each machine)    ─▶  hosts · policy · approvals  ─▶  Matrix
+ MCP tools (Cursor/Copilot…)  ─▶  orc-mcp: notify/ask/approve     → WhatsApp/Slack/Signal
+```
 
-## What this is not
+Two complementary mechanisms feed the same inbox:
 
-Not a new AI agent. Not a replacement for Claude Code, Codex, or Cursor. Not a hosted SaaS. Not a workflow builder. Not an IDE.
+1. **Observe** — a read-only watcher tails your existing agent sessions (Claude Code, Codex, Gemini) and surfaces each as a thread. Nothing is hijacked; the watcher reads, it doesn't drive.
+2. **The universal MCP bridge (`orc-mcp`)** — install one small MCP server into *any* MCP-capable tool (Cursor, Copilot, Codex, Claude Code, Kiro, …) and the agent gains three tools that route through *your* backend:
+   - `notify(message)` — push progress to your chat
+   - `ask_human(question, options)` — ask you something and wait for the reply
+   - `request_approval(action, preview)` — request permission for an action (**fail-closed**: denies on timeout)
 
-## Reachability honesty
+   This is opt-in and agent-initiated — the agent calls out to you. No vendor API is impersonated, no closed UI is driven.
 
-| Tier | Examples | Reachable? |
-|---|---|---|
-| 1. Local CLIs | Claude Code, Codex, Ollama, OpenCode, Aider | ✅ via Agent SDK / PTY / HTTP |
-| 2. Provider APIs | Anthropic, OpenAI, Gemini, ElevenLabs, OpenRouter, Salesforce Agentforce | ✅ standard HTTPS |
-| 3. Closed third-party UIs | Cursor, Windsurf, Antigravity, Copilot in Excel/Word/PowerPoint, claude.ai web, chatgpt.com web | ❌ vendor-blocked |
+## Status — backend foundation in place
 
-This project covers Tiers 1 and 2. Tier 3 is out of scope — those vendors do not expose chat-injection APIs and we will not ship browser-extension hacks.
+The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenRemote-Control/pull/1)–[#6](https://github.com/Pher217/OpenRemote-Control/pull/6) merged, **~438 tests passing**, live ASGI smoke test green.
 
-## Stack (all free / OSS-friendly)
+**Shipped:**
 
-Django 5.1 + DRF + Channels · PostgreSQL 16 · Valkey 8 · Celery 5 · Next.js 15 PWA + Tailwind + shadcn/ui · Python 3.13 host daemon · age-encrypted credential vault · ntfy push · python-telegram-bot · faster-whisper for voice · Tailscale (or headscale) for connectivity · Caddy 2 · OpenTelemetry → Loki + Tempo + Prometheus + Grafana · Docker Compose for dev.
+- Multi-runtime **observe** (Claude Code / Codex / Gemini) via a pluggable runtime registry
+- Interactive **answer-in-chat** (the `Prompt` primitive)
+- The **universal MCP bridge** — `apps.connectors` backend + the installable [`orc-mcp`](connectors/orc-mcp/README.md) client
+- **Telegram + Matrix** surfaces (→ WhatsApp / Slack / Signal via mautrix bridges)
+- **Multi-host** backend (`apps.hostlink`) + a **host daemon client** (`host-agent`: `orc-host enroll | daemon`)
+- A **PTY input-safety core** that the next milestone builds on
 
-## Status
+**In progress / next:**
 
-Backend Phase 1 is in place: Django apps (accounts, hosts, projects, policies, threads, approvals, audit, skills, slash, adapters, tier2, telegram) with models, DRF API, a Channels WebSocket consumer, Celery tasks, audit signals, and policy permissions. The credential envelope (key id, recipient, scheme version, rotation, host binding, revocation) and redaction-before-persistence are part of the data model. Runtime adapters, the host daemon, and the frontend are not built yet.
+- A **deploy runbook** (docker-compose: Matrix homeserver + bridges + headscale; daemon on a second machine)
+- `orc run` — approval-gated remote terminal (PTY) streaming, building on the existing input-safety core
+- Per-connector keypair identity hardening (replacing the shared bearer token) before any multi-user use
+- The Next.js PWA frontend (scaffolded; not yet built)
 
-Design specifications, the delegated task breakdown, and the threat-model planning are maintained in the maintainer's private knowledge base rather than in this repo.
+## Why it's different
 
-## Branding
+- **Sovereign / self-hosted** — no SaaS, no hosted middleman. Sessions, prompts, approvals, and credentials stay on hardware you own. The whole stack is OSS and self-hostable.
+- **Multi-host** — your MacBook, Windows workstation, and Linux VPS become one fleet, one inbox. A host daemon enrolls each machine over your private network.
+- **Multi-runtime** — Claude Code, Codex, and Gemini today via the runtime registry; any MCP tool via the bridge.
+- **Two-way, not just a viewer** — agents ask, you answer; agents request, you approve — right from chat.
+- **Policy + approval + audit built in** — sensitivity-aware project profiles, risk-tiered approvals, and an append-only Postgres audit log across heterogeneous runtimes.
+- **Surfaces you already use** — Telegram and Matrix today; Matrix bridges fan out to WhatsApp, Slack, Signal, and more.
 
-This project is a third-party tool. Per Anthropic's Agent SDK guidelines, this product does not use the "Claude Code" name or visual style. In UI, Claude runtimes are labeled "Claude Agent (SDK)", "Claude (Remote Control)", "Claude (CLI)", or "Claude (observed)" depending on adapter.
+## What it is not
+
+- a new AI agent
+- a replacement for Claude Code, Codex, Gemini, Cursor, or Copilot
+- a hosted SaaS, a workflow builder, or an IDE
+- a browser-scraping wrapper around closed vendor UIs
+
+If a tool can't be reached through an SDK, exported session files, or MCP, it stays out of scope — no brittle browser hacks.
+
+## Try the bridge
+
+The fastest way to see this work: connect one tool and have its agent send a notification or ask a question through your chat inbox. With a backend running, install [`orc-mcp`](connectors/orc-mcp/README.md) into any MCP tool:
+
+```bash
+# Claude Code
+claude mcp add orc -- orc-mcp
+```
+
+```toml
+# OpenAI Codex CLI — ~/.codex/config.toml
+[mcp_servers.orc]
+command = "orc-mcp"
+```
+
+```json
+// Cursor — ~/.cursor/mcp.json
+{ "mcpServers": { "orc": { "command": "orc-mcp" } } }
+```
+
+Set `ORC_BACKEND_URL` and `ORC_CONNECTOR_TOKEN`, and the agent can reach your chat. Full env reference and the other tools are in the [`orc-mcp` README](connectors/orc-mcp/README.md).
+
+## Run the backend (dev)
+
+```bash
+# Postgres for tests / dev
+docker run -d --name orc-pg \
+  -e POSTGRES_DB=openremote_control -e POSTGRES_USER=acc_user \
+  -e POSTGRES_PASSWORD=acc_password -p 5544:5432 postgres:16
+
+cd backend
+uv sync --extra dev
+POSTGRES_PORT=5544 POSTGRES_HOST=localhost .venv/bin/python -m pytest -q
+```
+
+> **Note:** `acc_user` / `acc_password` are throwaway local-dev credentials — they are **not** production secrets. Set a real `POSTGRES_PASSWORD` (and `SECRET_KEY`) via the environment before deploying.
+
+See [`docker-compose.yml`](docker-compose.yml) and the [`Makefile`](Makefile) for the full dev loop.
+
+## Stack
+
+All free / OSS-friendly:
+
+- **Backend** — Django 5.1, DRF, Channels, Celery 5
+- **Data plane** — PostgreSQL 16, Valkey 8, append-only audit log
+- **Surfaces** — Telegram, Matrix (→ WhatsApp/Slack/Signal via bridges), MCP; Next.js 15 + Tailwind + shadcn/ui PWA planned
+- **Host side** — Python 3.13 daemon, age-encrypted credential vault, ntfy push, faster-whisper voice, Tailscale / headscale connectivity
+- **Ops** — Docker Compose (dev), Caddy 2, OpenTelemetry → Loki + Tempo + Prometheus + Grafana
+
+## Contributing
+
+The backend foundation is solid; the most useful contributions right now are about **reaching more tools and standing it up live**. Best first contributions:
+
+- **Add a runtime adapter** for another agent CLI — open a discussion describing its session lifecycle, auth modes, and the events/hooks it exposes.
+- **Test the deploy path** on your own self-hosted infrastructure and report where the docs fall short — the runbook is being written now, and real-world friction is invaluable.
+- **Improve the `orc-mcp` install docs** for Cursor, Codex, Claude Code, Copilot, and Kiro.
+- **Harden the security boundaries** — the vault, policy engine, secrets redactor, and approval flow get design review before changes; security-minded eyes are very welcome. See [SECURITY.md](SECURITY.md) and [`docs/security/`](docs/security/).
+- **Bug reports and tests** against the existing backend apps.
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, CI, and commit conventions. Some early design notes still live in the maintainer's private knowledge base; if a decision is unclear, open an issue and we'll move the needed context into public docs.
 
 ## License
 
-[Apache-2.0](LICENSE) for code. Documentation in `docs/` is dual-licensed CC-BY-SA 4.0 / Apache-2.0.
+[Apache-2.0](LICENSE) for code. Documentation in [`docs/`](docs/) is dual-licensed CC-BY-SA 4.0 / Apache-2.0.
+
+OpenRemote Control is an independent, third-party project, not affiliated with Anthropic, OpenAI, Google, or other supported tool vendors. Per Anthropic's Agent SDK guidelines it does not use the "Claude Code" name or visual style; in the UI, Claude runtimes are labeled "Claude Agent (SDK)", "Claude (Remote Control)", "Claude (CLI)", or "Claude (observed)" depending on the adapter.
 
 ## Author
 
