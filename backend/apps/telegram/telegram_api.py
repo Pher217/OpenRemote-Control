@@ -48,7 +48,7 @@ async def send_message(
     parse_mode=None,
     reply_markup=None,
     disable_notification=None,
-) -> None:
+) -> int | None:
     payload = {"chat_id": chat_id, "text": text}
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
@@ -64,6 +64,36 @@ async def send_message(
             json=payload,
         )
         resp.raise_for_status()
+        try:
+            return resp.json()["result"]["message_id"]
+        except Exception:
+            return None
+
+
+async def edit_message_text(
+    chat_id,
+    message_id,
+    text,
+    *,
+    message_thread_id=None,
+    parse_mode=None,
+) -> bool:
+    """Edit an existing message in place. Returns True on success, False on failure.
+
+    Editing does not re-notify recipients — that is the point of this function.
+    Note: editMessageText identifies the message by (chat_id, message_id); it does
+    NOT take message_thread_id (the kwarg is accepted for call-site symmetry but
+    intentionally not sent, since Telegram rejects the unknown field).
+    """
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if parse_mode is not None:
+        payload["parse_mode"] = parse_mode
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/editMessageText",
+            json=payload,
+        )
+        return resp.is_success
 
 
 async def answer_callback_query(
