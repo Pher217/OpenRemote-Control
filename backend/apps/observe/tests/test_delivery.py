@@ -221,3 +221,29 @@ def test_pick_color_deterministic():
     c2 = pick_color("Saaaaaaa")
     assert c1 == c2
     assert c1 in FORUM_ICON_COLORS
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_save_topic_id_persists_forum_chat_id():
+    """
+    GIVEN a new observed thread delivered into a forum
+    WHEN  deliver_turn creates the topic
+    THEN  metadata contains telegram_forum_chat_id alongside telegram_topic_id.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sforum01", "/tmp/fc.jsonl"
+    )
+    turn = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Sforum01"}
+
+    await deliver_turn(thread, turn, None, forum_chat_id=-100777, api=fake)
+
+    @database_sync_to_async
+    def _meta():
+        t = Thread.objects.get(id=thread.id)
+        return t.metadata.get("telegram_forum_chat_id"), t.metadata.get("telegram_topic_id")
+
+    forum_id, topic_id = await _meta()
+    assert topic_id is not None
+    assert forum_id == -100777
