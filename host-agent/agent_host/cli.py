@@ -75,3 +75,7 @@ def main() -> None:
         _cmd_enroll(args)
     elif args.command == "daemon":
         _cmd_daemon(args)
+
+
+if __name__ == "__main__":
+    main()

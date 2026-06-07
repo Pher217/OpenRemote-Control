@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -24,6 +25,13 @@ import websockets
 from agent_host.config import HostConfig
 from agent_host.queue import OfflineQueue
 from agent_host.signing import sign
+
+log = logging.getLogger(__name__)
+
+# Events whose JSON encoding exceeds this byte threshold are dropped rather than
+# sent — a single oversized frame will cause the server to close the connection
+# and would poison the offline queue indefinitely if retried.
+MAX_EVENT_BYTES = 1_000_000
 
 
 def connect_url(backend_url: str, cfg: HostConfig) -> str:
@@ -111,45 +119,71 @@ async def run_sender(
     # This is a simple coupling point; a more complex design could use callbacks.
     cfg._incoming_queue = _incoming  # type: ignore[attr-defined]
 
-    url = connect_url(cfg.backend_url, cfg)
-
-    async for ws in connect(url):
+    # Re-sign on every connection attempt: each reconnect must carry a fresh
+    # ts+nonce. We open ONE connection per signed URL (`async with`) and drive
+    # reconnection from this loop — deliberately NOT `async for ws in
+    # connect(url)`, whose internal auto-reconnect reuses the same URL (and
+    # nonce), which the backend's nonce-replay cache rejects with 4001/403.
+    backoff = 1.0
+    max_backoff = 30.0
+    while not stop.is_set():
+        url = connect_url(cfg.backend_url, cfg)
         try:
-            # Drain buffered offline events first (iterate manually — drain()
-            # is synchronous and cannot await ws.send directly).
-            buffered = queue._read_all()
-            if buffered:
-                failed_at = None
-                for i, event in enumerate(buffered):
+            async with connect(url) as ws:
+                backoff = 1.0  # reset after a successful connection
+                # Drain buffered offline events first (iterate manually — drain()
+                # is synchronous and cannot await ws.send directly).
+                buffered = queue._read_all()
+                if buffered:
+                    failed: list[dict] = []
+                    send_failed = False
+                    for event in buffered:
+                        encoded = json.dumps(event).encode("utf-8")
+                        if len(encoded) > MAX_EVENT_BYTES:
+                            log.warning(
+                                "Dropping oversized queued event (%d bytes > %d byte limit)",
+                                len(encoded),
+                                MAX_EVENT_BYTES,
+                            )
+                            continue  # Skip — never retry, never re-queue.
+                        if send_failed:
+                            # Keep remaining non-oversized events for next reconnect.
+                            failed.append(event)
+                            continue
+                        try:
+                            await ws.send(encoded.decode("utf-8"))
+                        except Exception:
+                            failed.append(event)
+                            send_failed = True
+                    if not failed:
+                        # All sent — clear queue.
+                        if queue._path.exists():
+                            queue._path.unlink()
+                    else:
+                        queue._write_all(failed)
+
+                # Stream incoming events until disconnected or stopped.
+                while not stop.is_set():
+                    try:
+                        event = await asyncio.wait_for(_incoming.get(), timeout=1.0)
+                    except TimeoutError:
+                        continue
                     try:
                         await ws.send(json.dumps(event))
                     except Exception:
-                        failed_at = i
+                        # Re-queue the event; the outer loop reconnects + re-signs.
+                        queue.enqueue(event)
                         break
-                if failed_at is None:
-                    # All sent — clear queue.
-                    if queue._path.exists():
-                        queue._path.unlink()
-                else:
-                    queue._write_all(buffered[failed_at:])
 
-            # Stream incoming events until disconnected or stop.
-            while not stop.is_set():
-                try:
-                    event = await asyncio.wait_for(_incoming.get(), timeout=1.0)
-                except TimeoutError:
-                    continue
-                try:
-                    await ws.send(json.dumps(event))
-                except Exception:
-                    # Re-queue the event and let the reconnect loop retry.
-                    queue.enqueue(event)
-                    break
-
+                if stop.is_set():
+                    return
+            # Connection closed (clean drop or stream break) — reconnect at once
+            # with a freshly-signed URL (no backoff for a healthy reconnect).
+            continue
+        except Exception:
+            # Failed to establish, or an unexpected error — back off, then the
+            # outer loop re-signs and retries.
             if stop.is_set():
                 return
-
-        except Exception:
-            # Any error breaks the inner loop; `async for ws in connect(url)`
-            # will reconnect with exponential backoff.
-            continue
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)

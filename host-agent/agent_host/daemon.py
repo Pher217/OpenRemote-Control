@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+import logging
 import os
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,7 +23,9 @@ from agent_host.config import HostConfig
 from agent_host.discovery import iter_files
 from agent_host.queue import OfflineQueue
 from agent_host.tailer import OffsetStore, read_new_lines
-from agent_host.wsclient import run_sender
+from agent_host.wsclient import MAX_EVENT_BYTES, run_sender
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_RUNTIMES = ["claude_code"]
 
@@ -52,7 +56,7 @@ async def _poll_loop(
                     raw = line.rstrip("\n")
                     if not raw:
                         continue
-                    event = {
+                    event: dict = {
                         "type": "session.line",
                         "data": {
                             "provider": provider,
@@ -60,6 +64,34 @@ async def _poll_loop(
                             "raw": raw,
                         },
                     }
+                    # Guard against oversized events (e.g. subagent 'attachment'
+                    # lines that embed base64-encoded files).  Truncate the raw
+                    # field so the event stays valid JSON under the limit rather
+                    # than skipping it entirely — partial context is better than
+                    # no context for diagnostic purposes.
+                    encoded = json.dumps(event).encode("utf-8")
+                    if len(encoded) > MAX_EVENT_BYTES:
+                        overhead = len(encoded) - len(raw.encode("utf-8"))
+                        # Allow some slack for the JSON encoding of the truncated string.
+                        max_raw_bytes = MAX_EVENT_BYTES - overhead - 64
+                        if max_raw_bytes <= 0:
+                            log.warning(
+                                "Skipping oversized event from %s (%d bytes)",
+                                path,
+                                len(encoded),
+                            )
+                            continue
+                        truncated_raw = raw.encode("utf-8")[:max_raw_bytes].decode(
+                            "utf-8", errors="ignore"
+                        )
+                        log.warning(
+                            "Truncating oversized event from %s (%d bytes -> ~%d bytes)",
+                            path,
+                            len(encoded),
+                            max_raw_bytes + overhead,
+                        )
+                        event["data"]["raw"] = truncated_raw + " [truncated]"
+                        event = json.loads(json.dumps(event))  # Verify valid JSON.
                     queue.enqueue(event)
                     # Also push directly to the sender's incoming queue if connected.
                     incoming: asyncio.Queue | None = getattr(cfg, "_incoming_queue", None)

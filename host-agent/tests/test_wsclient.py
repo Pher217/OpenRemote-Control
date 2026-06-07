@@ -8,7 +8,6 @@ import asyncio
 import hashlib
 import hmac
 import json
-from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs, urlparse
 
@@ -151,6 +150,38 @@ class _FakeWs:
         return ""
 
 
+def _cm_connect(ws_per_attempt, *, stop_event=None, stop_at_attempt=1, urls=None):
+    """Fake ``connect``: returns an async context manager per call.
+
+    ``async with connect(url) as ws`` is how run_sender opens ONE connection per
+    signed URL (mirroring ``websockets.connect`` used as a context manager).
+
+    ws_per_attempt: ws object(s) to yield on successive connect() calls; the last
+        entry repeats for further attempts.
+    stop_event: set on entering a connection once the (1-based) attempt index
+        reaches stop_at_attempt — so run_sender exits cleanly.
+    urls: optional list that records each URL passed to connect().
+    """
+    state = {"n": 0}
+
+    def connect(url):
+        idx = state["n"]
+        state["n"] += 1
+        if urls is not None:
+            urls.append(url)
+        ws = ws_per_attempt[idx] if idx < len(ws_per_attempt) else ws_per_attempt[-1]
+
+        @asynccontextmanager
+        async def _cm():
+            if stop_event is not None and (idx + 1) >= stop_at_attempt:
+                stop_event.set()
+            yield ws
+
+        return _cm()
+
+    return connect
+
+
 @pytest.mark.asyncio
 async def test_run_sender_drains_queued_events(tmp_path):
     """
@@ -166,38 +197,13 @@ async def test_run_sender_drains_queued_events(tmp_path):
     fake_ws = _FakeWs()
     stop = asyncio.Event()
 
-    @asynccontextmanager
-    async def _fake_connect(url: str) -> AsyncIterator[_FakeWs]:  # type: ignore
-        yield fake_ws
+    await run_sender(
+        cfg, queue, connect=_cm_connect([fake_ws], stop_event=stop), stop=stop
+    )
 
-    class _FakeConnectIter:
-        """Mimics `async for ws in connect(url)` — yields once then stops."""
-
-        def __init__(self, url: str) -> None:
-            self._url = url
-            self._yielded = False
-
-        def __aiter__(self) -> _FakeConnectIter:
-            return self
-
-        async def __anext__(self) -> _FakeWs:
-            if self._yielded:
-                raise StopAsyncIteration
-            self._yielded = True
-            stop.set()  # Stop after first connection so the test doesn't hang.
-            return fake_ws
-
-    def fake_connect(url: str) -> _FakeConnectIter:
-        return _FakeConnectIter(url)
-
-    await run_sender(cfg, queue, connect=fake_connect, stop=stop)
-
-    # Both queued events must have been sent.
     raw_values = [ev["data"]["raw"] for ev in fake_ws.sent]
     assert "line1" in raw_values
     assert "line2" in raw_values
-
-    # Queue should be empty after successful drain.
     assert len(queue) == 0
 
 
@@ -213,25 +219,7 @@ async def test_run_sender_sends_incoming_events(tmp_path):
     stop = asyncio.Event()
     fake_ws = _FakeWs()
 
-    class _FakeConnectIter:
-        def __init__(self, url: str) -> None:
-            self._url = url
-            self._yielded = False
-
-        def __aiter__(self) -> _FakeConnectIter:
-            return self
-
-        async def __anext__(self) -> _FakeWs:
-            if self._yielded:
-                raise StopAsyncIteration
-            self._yielded = True
-            return fake_ws
-
-    def fake_connect(url: str) -> _FakeConnectIter:
-        return _FakeConnectIter(url)
-
     async def _push_and_stop() -> None:
-        # Wait until the sender has attached the incoming queue.
         while not hasattr(cfg, "_incoming_queue"):
             await asyncio.sleep(0.01)
         event = {"type": "session.line", "data": {"raw": "live-line"}}
@@ -240,9 +228,114 @@ async def test_run_sender_sends_incoming_events(tmp_path):
         stop.set()
 
     await asyncio.gather(
-        run_sender(cfg, queue, connect=fake_connect, stop=stop),
+        run_sender(cfg, queue, connect=_cm_connect([fake_ws]), stop=stop),
         _push_and_stop(),
     )
 
     raw_values = [ev.get("data", {}).get("raw") for ev in fake_ws.sent]
     assert "live-line" in raw_values
+
+
+# ---------------------------------------------------------------------------
+# Bug-fix tests: oversized event drain + reconnect re-sign
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_drain_skips_oversized_event_and_clears_queue(tmp_path):
+    """
+    GIVEN an offline queue containing an oversized event followed by a normal event
+    WHEN run_sender() connects and drains the queue
+    THEN the oversized event is dropped (not sent), the normal event after it is sent,
+         and the queue is empty (the oversized event is NOT re-queued).
+    """
+    from agent_host.wsclient import MAX_EVENT_BYTES
+
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    big_raw = "X" * (MAX_EVENT_BYTES + 1)
+    queue.enqueue({"type": "session.line", "data": {"raw": big_raw}})
+    queue.enqueue({"type": "session.line", "data": {"raw": "normal-after-oversized"}})
+
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    fake_ws = _FakeWs()
+
+    await run_sender(
+        cfg, queue, connect=_cm_connect([fake_ws], stop_event=stop), stop=stop
+    )
+
+    sent_raws = [ev.get("data", {}).get("raw", "") for ev in fake_ws.sent]
+    assert not any(r == big_raw for r in sent_raws), "oversized event must not be sent"
+    assert "normal-after-oversized" in sent_raws
+    assert len(queue) == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_oversized_only_queue_is_cleared(tmp_path):
+    """
+    GIVEN an offline queue containing ONLY an oversized event
+    WHEN run_sender() drains it
+    THEN nothing is sent and the queue ends up empty (not poisoned).
+    """
+    from agent_host.wsclient import MAX_EVENT_BYTES
+
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    queue.enqueue({"type": "session.line", "data": {"raw": "Y" * (MAX_EVENT_BYTES + 1)}})
+
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    fake_ws = _FakeWs()
+
+    await run_sender(
+        cfg, queue, connect=_cm_connect([fake_ws], stop_event=stop), stop=stop
+    )
+
+    assert fake_ws.sent == []
+    assert len(queue) == 0
+
+
+@pytest.mark.asyncio
+async def test_reconnect_uses_different_nonces(tmp_path):
+    """
+    GIVEN run_sender() whose first WS connection fails on a live-stream send
+    WHEN it reconnects
+    THEN the second connect() receives a URL with a DIFFERENT nonce (fresh re-sign),
+         so the backend's nonce-replay cache would not reject it.
+
+    The first connection's send() raises (server closed); run_sender re-queues
+    the event, the connection closes, and the OUTER loop re-signs a fresh URL for
+    the second attempt — proving reconnects do not reuse the nonce.
+    """
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    received_urls: list[str] = []
+
+    class _FailOnSendWs:
+        async def send(self, data: str) -> None:
+            raise ConnectionResetError("server closed connection")
+
+    connect = _cm_connect(
+        [_FailOnSendWs(), _FakeWs()],
+        stop_event=stop,
+        stop_at_attempt=2,
+        urls=received_urls,
+    )
+
+    async def _push_event() -> None:
+        while not hasattr(cfg, "_incoming_queue"):
+            await asyncio.sleep(0.005)
+        await cfg._incoming_queue.put(  # type: ignore[attr-defined]
+            {"type": "session.line", "data": {"raw": "trigger"}}
+        )
+
+    await asyncio.gather(
+        run_sender(cfg, queue, connect=connect, stop=stop),
+        _push_event(),
+    )
+
+    assert len(received_urls) >= 2, "Expected at least two connection attempts"
+    nonces = [parse_qs(urlparse(u).query)["nonce"][0] for u in received_urls[:2]]
+    assert nonces[0] != nonces[1], (
+        f"Both reconnect attempts used the same nonce ({nonces[0]!r}); "
+        "the backend would reject the second attempt with 403."
+    )
