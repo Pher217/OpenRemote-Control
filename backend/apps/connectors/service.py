@@ -14,6 +14,24 @@ from apps.threads.models import Message, Thread
 logger = logging.getLogger(__name__)
 
 
+def resolve_connector_id(request, body_connector_id: str) -> str:
+    """Return the authoritative connector_id for this request.
+
+    When the request is signature-authenticated, the connector_id on the
+    registered ConnectorKey is server-authoritative — we ignore the body value
+    to prevent identity spoofing via a crafted connector_id field.
+    For legacy token-authenticated requests the body value is trusted as-is.
+    """
+    from apps.connectors.auth import ConnectorSignatureAuthentication
+    from apps.connectors.models import ConnectorKey
+
+    if isinstance(request.successful_authenticator, ConnectorSignatureAuthentication):
+        key = request.user  # set by ConnectorSignatureAuthentication as principal
+        if isinstance(key, ConnectorKey):
+            return key.connector_id
+    return body_connector_id
+
+
 def register_or_touch(
     connector_id: str,
     tool: str,

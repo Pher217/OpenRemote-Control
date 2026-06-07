@@ -175,6 +175,10 @@ ORC_PROMPT_MATRIX_ROOM = os.environ.get("ORC_PROMPT_MATRIX_ROOM", "")
 # presents once to receive a per-host token.
 ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
 
+# Public backend URL embedded in QR pairing payloads (`/pair`, `manage.py orc_pair`).
+# Empty => the pairing payload degrades to just the code (manual --backend still works).
+ORC_PUBLIC_BASE_URL = os.environ.get("ORC_PUBLIC_BASE_URL", "")
+
 # Matrix surface (apps.matrix). Bot connects via long-poll sync; no inbound URL.
 # Approvers must be exact, real (non-puppet) MXIDs — never add a bridge puppet MXID.
 MATRIX_HOMESERVER = os.environ.get("MATRIX_HOMESERVER", "")
