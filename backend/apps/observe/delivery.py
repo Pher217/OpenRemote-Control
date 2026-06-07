@@ -65,7 +65,11 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
     )
     try:
         await api.send_message(
-            forum_chat_id, html, message_thread_id=topic_id, parse_mode="HTML"
+            forum_chat_id,
+            html,
+            message_thread_id=topic_id,
+            parse_mode="HTML",
+            disable_notification=True,
         )
     except Exception:
         label = (
@@ -74,4 +78,9 @@ async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
             else settings.TELEGRAM_ASSISTANT_LABEL
         )
         plain = f"{label}: {parsed['text'][:3900]}"
-        await api.send_message(forum_chat_id, plain, message_thread_id=topic_id)
+        await api.send_message(
+            forum_chat_id,
+            plain,
+            message_thread_id=topic_id,
+            disable_notification=True,
+        )
