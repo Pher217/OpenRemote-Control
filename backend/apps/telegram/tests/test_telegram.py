@@ -133,3 +133,29 @@ async def test_slash_stop(monkeypatch, settings):
 
     assert await _status() == Thread.StatusChoices.STOPPED
     assert sent == [(12345, "Thread stopped.")]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_openremote_control_rebinds_chat_to_new_thread(monkeypatch, settings):
+    """GIVEN a chat WHEN /openremote-control runs THEN the chat is rebound to the new thread."""
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
+    monkeypatch.setattr("apps.tier2.ollama.httpx.AsyncClient", _FakeOllamaClient)
+
+    original = await database_sync_to_async(get_or_create_thread_for_chat)(12345)
+
+    sent = []
+
+    async def cap(cid, txt):
+        sent.append((cid, txt))
+
+    await handle_update(12345, "/openremote-control Nightly deploy", send=cap)
+
+    @database_sync_to_async
+    def _bound_thread():
+        return TelegramChat.objects.select_related("thread").get(chat_id=12345).thread
+
+    bound = await _bound_thread()
+    assert bound.id != original.id
+    assert bound.name == "Nightly deploy"
+    assert sent == [(12345, "Started new session: Nightly deploy")]

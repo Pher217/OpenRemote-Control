@@ -4,24 +4,33 @@
 
 AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard.
 
-OpenRemote Control turns every agent session into a chat thread. Agents **notify** you, **ask** you questions, and **request approval** — and you answer once, from Telegram or Matrix, without hunting down the right machine, terminal, or editor.
+OpenRemote Control turns every agent session into a chat in the app you already use. Agents **notify** you, **ask** you questions, and **request approval** — and you answer once, from Telegram or Matrix, without hunting down the right machine, terminal, or editor.
 
 It's sovereign by design: you host it, your sessions and credentials never leave your infrastructure, and it reaches your tools through official SDKs and the open Model Context Protocol — never browser scraping or vendor hacks.
 
 ## How it works
 
 ```
-   Agents & machines                OpenRemote Control              Your chat
- ─────────────────────────        ────────────────────────       ───────────────
- Claude Code / Codex / Gemini ─▶  observe → threads               Telegram
- host-agent (each machine)    ─▶  hosts · policy · approvals  ─▶  Matrix
- MCP tools (Cursor/Copilot…)  ─▶  orc-mcp: notify/ask/approve     → WhatsApp/Slack/Signal
+   Agents & machines                OpenRemote Control          Your app of choice
+ ──────────────────────────       ─────────────────────       ─────────────────────
+ Claude Code / Codex / Gemini ─▶                               Telegram
+ host-agent (each machine)    ─▶   one chat session per   ◀─▶  Matrix
+ MCP tools + orc-mcp          ─▶   agent · policy ·            → WhatsApp / Slack /
+   notify · ask · approve          approvals · audit              Signal
 ```
 
-Two complementary mechanisms feed the same inbox:
+You live in **one app you already use** — Telegram, or WhatsApp / Slack / Signal through Matrix bridges. Every agent session shows up there as an ordinary chat you read and reply to; there is no separate inbox to learn. Start one yourself, right from that chat, with the universal command:
 
-1. **Observe** — a read-only watcher tails your existing agent sessions (Claude Code, Codex, Gemini) and surfaces each as a thread. Nothing is hijacked; the watcher reads, it doesn't drive.
-2. **The universal MCP bridge (`orc-mcp`)** — install one small MCP server into *any* MCP-capable tool (Cursor, Copilot, Codex, Claude Code, Kiro, …) and the agent gains three tools that route through *your* backend:
+```
+/openremote-control [name]      # short alias: /orc
+```
+
+It opens a fresh chat session (named, if you pass one) in the channel you're already in, and the conversation simply continues in your app of choice.
+
+Agents reach that same chat two ways:
+
+1. **Observe** — a read-only watcher tails your existing agent sessions (Claude Code, Codex, Gemini) and surfaces each as a chat. Nothing is hijacked; the watcher reads, it doesn't drive.
+2. **The universal MCP bridge (`orc-mcp`)** — a small MCP server you install into *any* MCP-capable tool (Cursor, Copilot, Codex, Claude Code, Kiro, …). It is purely a **dispatch tool**: the agent gains three calls that route through *your* backend into the same chat —
    - `notify(message)` — push progress to your chat
    - `ask_human(question, options)` — ask you something and wait for the reply
    - `request_approval(action, preview)` — request permission for an action (**fail-closed**: denies on timeout)
@@ -36,6 +45,7 @@ The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenR
 
 - Multi-runtime **observe** (Claude Code / Codex / Gemini) via a pluggable runtime registry
 - Interactive **answer-in-chat** (the `Prompt` primitive)
+- The universal **`/openremote-control`** (alias `/orc`) command — start a named chat session from any surface, then follow it in your app of choice
 - The **universal MCP bridge** — `apps.connectors` backend + the installable [`orc-mcp`](connectors/orc-mcp/README.md) client
 - **Telegram + Matrix** surfaces (→ WhatsApp / Slack / Signal via mautrix bridges)
 - **Multi-host** backend (`apps.hostlink`) + a **host daemon client** (`host-agent`: `orc-host enroll | daemon`)
