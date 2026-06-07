@@ -1,0 +1,16 @@
+# Code owners are automatically requested for review on pull requests.
+# https://docs.github.com/en/repositories/managing-your-repos-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything in the repo.
+*       @Pher217
+
+# Security-sensitive areas — always reviewed by the maintainer.
+/backend/apps/accounts/      @Pher217
+/backend/apps/policies/      @Pher217
+/backend/apps/approvals/     @Pher217
+/backend/apps/hostlink/      @Pher217
+/backend/apps/connectors/    @Pher217
+/host-agent/                 @Pher217
+/docs/security/              @Pher217
+SECURITY.md                  @Pher217
+.github/                     @Pher217
