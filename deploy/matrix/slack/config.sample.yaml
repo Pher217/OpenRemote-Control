@@ -1,0 +1,38 @@
+# deploy/matrix/slack/config.sample.yaml
+#
+# Template for mautrix-slack (RELAY mode).
+# Run the bridge container once to generate the real config.yaml, then
+# edit it using this file as a reference.
+#
+# Docs: https://docs.mau.fi/bridges/go/slack/index.html
+
+homeserver:
+  address: http://synapse:8008
+  domain: matrix.example.com        # <-- your MATRIX_DOMAIN (no https://)
+
+appservice:
+  address: http://slack-bridge:29335
+  hostname: 0.0.0.0
+  port: 29335
+
+bridge:
+  username_template: "slack_{{.}}"
+  displayname_template: "{{.RealName}} (Slack)"
+
+  relay:
+    enabled: true
+    message_formats:
+      m.text: "{{ .Sender.Displayname }}: {{ .Message }}"
+      m.image: "{{ .Sender.Displayname }} sent an image"
+      m.file: "{{ .Sender.Displayname }} sent a file"
+
+  permissions:
+    "@operator:matrix.example.com": admin   # <-- replace with your operator MXID
+    "matrix.example.com": user              # <-- your MATRIX_DOMAIN
+    "*": relay
+
+logging:
+  min_level: info
+  writers:
+    - type: stdout
+      format: json

@@ -1,0 +1,13 @@
+// deploy/headscale/policy.hujson
+// Headscale ACL policy — allow all traffic within the mesh.
+// Tighten this once you know which nodes exist.
+// Docs: https://headscale.net/ref/acls/
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src":    ["*"],
+      "dst":    ["*:*"]
+    }
+  ]
+}

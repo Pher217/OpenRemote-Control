@@ -42,7 +42,8 @@ ENV/
 
 # uv
 .uv/
-uv.lock
+# uv.lock is committed: this is a deployable application and the Dockerfile's
+# `uv sync --locked` needs it for reproducible image builds.
 
 # Django
 *.log

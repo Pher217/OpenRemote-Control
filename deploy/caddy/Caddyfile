@@ -1,0 +1,70 @@
+# deploy/caddy/Caddyfile
+#
+# Set APP_DOMAIN, MATRIX_DOMAIN, HS_DOMAIN, BASE_DOMAIN in deploy/.env
+# Caddy reads them as environment variables via {$VAR} syntax.
+#
+# TLS certificates are obtained automatically from Let's Encrypt.
+# Ports 80 and 443 must be reachable from the internet.
+
+# ---------------------------------------------------------------------------
+# App — Django / Gunicorn / Channels (WebSocket-transparent)
+# ---------------------------------------------------------------------------
+{$APP_DOMAIN} {
+    reverse_proxy web:8000 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Matrix — Synapse homeserver
+# ---------------------------------------------------------------------------
+{$MATRIX_DOMAIN} {
+    reverse_proxy /_matrix/* synapse:8008 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+    }
+    reverse_proxy /_synapse/client/* synapse:8008 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Well-known delegation — hosted on the base domain so other Matrix servers
+# can discover this homeserver.  Requires a separate BASE_DOMAIN DNS record
+# pointing to this server, or a path on APP_DOMAIN if they share a domain.
+# ---------------------------------------------------------------------------
+{$BASE_DOMAIN} {
+    # m.homeserver  →  clients use https://MATRIX_DOMAIN
+    handle /.well-known/matrix/client {
+        respond `{"m.homeserver":{"base_url":"https://{$MATRIX_DOMAIN}"}}` 200 {
+            header Content-Type application/json
+            header Access-Control-Allow-Origin *
+        }
+    }
+
+    # m.server  →  server-to-server federation port
+    handle /.well-known/matrix/server {
+        respond `{"m.server":"{$MATRIX_DOMAIN}:443"}` 200 {
+            header Content-Type application/json
+        }
+    }
+
+    # Fall through everything else (e.g. if BASE_DOMAIN == APP_DOMAIN)
+    handle {
+        reverse_proxy web:8000 {
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Headscale VPN control plane
+# ---------------------------------------------------------------------------
+{$HS_DOMAIN} {
+    reverse_proxy headscale:8080 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Real-IP {remote_host}
+    }
+}

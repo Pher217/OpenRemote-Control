@@ -1,0 +1,49 @@
+# deploy/matrix/synapse/homeserver.sample.yaml
+#
+# Minimal production overrides for Synapse.
+# After running `docker run ... generate`, open synapse/data/homeserver.yaml
+# and apply these settings.  Search for each key — do not append blindly.
+#
+# See: https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
+
+# The domain that will appear in Matrix IDs: @user:MATRIX_DOMAIN
+server_name: "matrix.example.com"   # <-- replace with your MATRIX_DOMAIN
+
+# Synapse listens on 8008 inside Docker; Caddy terminates TLS externally.
+listeners:
+  - port: 8008
+    tls: false
+    type: http
+    x_forwarded: true
+    resources:
+      - names: [client, federation]
+        compress: false
+
+# PostgreSQL database (separate instance from the app DB)
+database:
+  name: psycopg2
+  txn_limit: 10000
+  args:
+    user: synapse
+    password: "CHANGE_ME"           # <-- same as MATRIX_POSTGRES_PASSWORD in .env
+    database: synapse
+    host: matrix-postgres
+    port: 5432
+    cp_min: 5
+    cp_max: 10
+
+# Disable public registration; accounts are created by the admin.
+enable_registration: false
+
+# Required to register bridge appservices via the admin API.
+# Generate a random string: openssl rand -hex 32
+registration_shared_secret: "CHANGE_ME_RANDOM_32_BYTES_HEX"
+
+# Where appservice registration files live.
+# Copy whatsapp/registration.yaml and slack/registration.yaml here.
+app_service_config_files:
+  - /data/appservices/whatsapp-registration.yaml
+  - /data/appservices/slack-registration.yaml
+
+# Log to stdout so docker logs / your log aggregator picks it up.
+log_config: ""
