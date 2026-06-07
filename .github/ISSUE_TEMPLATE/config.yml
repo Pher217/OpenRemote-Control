@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Pher217/OpenRemote-Control/security/advisories/new
+    about: Please report security vulnerabilities privately, not as a public issue. See SECURITY.md.
+  - name: Question or idea
+    url: https://github.com/Pher217/OpenRemote-Control/discussions
+    about: Ask questions and discuss ideas in Discussions.

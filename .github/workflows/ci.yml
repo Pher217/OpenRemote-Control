@@ -45,17 +45,19 @@ jobs:
       - name: Lint with ruff
         working-directory: backend
         run: python -m ruff check .
-      - name: Type check with mypy
+      - name: Type check with mypy (advisory)
         working-directory: backend
+        # Non-blocking: gradual typing adoption. Remove `|| true` once the
+        # codebase is clean under django-stubs.
         run: python -m mypy --ignore-missing-imports . || true
       - name: Security check with bandit
         working-directory: backend
-        run: python -m bandit -r . --skip B101 || true
+        run: python -m bandit -r apps config --skip B101 -x '*/tests/*' --severity-level medium -q
       - name: Run tests
         working-directory: backend
         env:
           DATABASE_URL: postgres://acc_user:acc_password@localhost:5432/agent_command_center
-        run: python -m pytest || true
+        run: python -m pytest
 
   host-agent:
     runs-on: ubuntu-latest
@@ -74,11 +76,14 @@ jobs:
         run: python -m ruff check .
       - name: Security check with bandit
         working-directory: host-agent
-        run: python -m bandit -r . || true
+        run: python -m bandit -r agent_host --skip B101 -x '*/tests/*' --severity-level medium -q
       - name: Run tests
         working-directory: host-agent
-        run: python -m pytest || true
+        run: python -m pytest
 
+  # The Next.js PWA is scaffolded but not yet built — these steps are
+  # intentionally advisory (`|| true`). Make them blocking once the
+  # frontend is implemented.
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -89,12 +94,12 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci || npm install
-      - name: Lint
+      - name: Lint (advisory)
         working-directory: frontend
         run: npm run lint || true
-      - name: Type check
+      - name: Type check (advisory)
         working-directory: frontend
         run: npm run typecheck || true
-      - name: Build
+      - name: Build (advisory)
         working-directory: frontend
         run: npm run build || true
