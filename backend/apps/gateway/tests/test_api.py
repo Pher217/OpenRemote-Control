@@ -168,6 +168,24 @@ class TestOutbox:
         response = client.get(f"{OUTBOX}?platform=twitter", **AUTH)
         assert response.status_code == 400
 
+    def test_outbox_signal_platform_returns_200(self, client, with_token):
+        """
+        GIVEN a valid bearer token and platform=signal
+        WHEN GET /api/gateway/outbox?platform=signal
+        THEN 200 is returned (signal is a valid gateway platform)
+        """
+        response = client.get(f"{OUTBOX}?platform=signal", **AUTH)
+        assert response.status_code == 200
+
+    def test_outbox_imessage_platform_returns_200(self, client, with_token):
+        """
+        GIVEN a valid bearer token and platform=imessage
+        WHEN GET /api/gateway/outbox?platform=imessage
+        THEN 200 is returned (imessage is a valid gateway platform)
+        """
+        response = client.get(f"{OUTBOX}?platform=imessage", **AUTH)
+        assert response.status_code == 200
+
 
 # ---------------------------------------------------------------------------
 # Inbound — pending prompt resolved

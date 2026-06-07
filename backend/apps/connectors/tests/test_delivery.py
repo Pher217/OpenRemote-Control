@@ -1,8 +1,10 @@
 """
 Delivery routing tests for apps.connectors.service.
 
-Telegram is monkeypatched — no network calls.
-Gateway enqueue is tested separately in apps/gateway/tests/.
+Single-platform model: the operator picks ONE messaging app and every
+prompt/notification goes there only. Telegram send is monkeypatched — no
+network calls. GatewayMessage rows are the observable side-effect for
+non-Telegram platforms.
 """
 
 import pytest
@@ -33,10 +35,11 @@ def _make_async_spy():
 class TestStartSessionDelivery:
     def test_announces_to_telegram_when_chat_id_configured(self, settings, monkeypatch):
         """
-        GIVEN ORC_PROMPT_CHAT_ID is set and telegram send_message is patched
+        GIVEN ORC_MESSAGING_PLATFORM=telegram and ORC_PROMPT_CHAT_ID is set
         WHEN service.start_session() is called
-        THEN the session-started announcement is sent once to that chat
+        THEN the announcement is sent once via telegram send_message; no GatewayMessage rows created
         """
+        settings.ORC_MESSAGING_PLATFORM = "telegram"
         settings.ORC_PROMPT_CHAT_ID = "777"
 
         calls, spy = _make_async_spy()
@@ -56,12 +59,16 @@ class TestStartSessionDelivery:
         assert chat_id == 777
         assert "Hotfix" in text
 
+        from apps.gateway.models import GatewayMessage
+        assert GatewayMessage.objects.count() == 0
+
     def test_no_announcement_when_no_surface_configured(self, settings, monkeypatch):
         """
-        GIVEN no surface is configured
+        GIVEN ORC_MESSAGING_PLATFORM=telegram and ORC_PROMPT_CHAT_ID is empty
         WHEN service.start_session() is called
         THEN no delivery happens and the session is still created
         """
+        settings.ORC_MESSAGING_PLATFORM = "telegram"
         settings.ORC_PROMPT_CHAT_ID = ""
 
         tg_calls, tg_spy = _make_async_spy()
@@ -80,18 +87,19 @@ class TestStartSessionDelivery:
 
 
 # ---------------------------------------------------------------------------
-# ask() delivery routing
+# ask() / approve() delivery routing — Telegram
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-class TestAskDelivery:
-    def test_telegram_surface_called_when_chat_id_configured(self, settings, monkeypatch):
+class TestAskDeliveryTelegram:
+    def test_telegram_send_called_when_active(self, settings, monkeypatch):
         """
-        GIVEN ORC_PROMPT_CHAT_ID is set and telegram send_message is patched
+        GIVEN ORC_MESSAGING_PLATFORM=telegram and ORC_PROMPT_CHAT_ID is set
         WHEN service.ask() is called
-        THEN send_message is invoked once
+        THEN send_message is invoked once with the correct chat_id; no GatewayMessage rows created
         """
+        settings.ORC_MESSAGING_PLATFORM = "telegram"
         settings.ORC_PROMPT_CHAT_ID = "999"
 
         calls, spy = _make_async_spy()
@@ -108,15 +116,137 @@ class TestAskDelivery:
 
         assert nonce
         assert len(calls) == 1
-        # first positional arg is chat_id (as int)
         assert calls[0][0][0] == 999
 
-    def test_no_surface_called_when_none_configured(self, settings, monkeypatch):
+        from apps.gateway.models import GatewayMessage
+        assert GatewayMessage.objects.count() == 0
+
+    def test_approve_calls_telegram_send(self, settings, monkeypatch):
         """
-        GIVEN ORC_PROMPT_CHAT_ID is not set
+        GIVEN ORC_MESSAGING_PLATFORM=telegram and ORC_PROMPT_CHAT_ID is set
+        WHEN service.approve() is called
+        THEN send_message is invoked once; no GatewayMessage rows created
+        """
+        settings.ORC_MESSAGING_PLATFORM = "telegram"
+        settings.ORC_PROMPT_CHAT_ID = "111"
+
+        calls, spy = _make_async_spy()
+        import apps.telegram.telegram_api as tg_api
+        monkeypatch.setattr(tg_api, "send_message", spy)
+
+        nonce = connector_service.approve(
+            connector_id="d-tg-2",
+            tool="claude_code",
+            workspace_root="/tmp",
+            action="rm -rf /tmp/test",
+            preview="This will delete the test directory.",
+        )
+
+        assert nonce
+        assert len(calls) == 1
+
+        from apps.gateway.models import GatewayMessage
+        assert GatewayMessage.objects.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# ask() delivery routing — WhatsApp (gateway platform)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestAskDeliveryWhatsApp:
+    def test_ask_enqueues_exactly_one_gateway_message_for_whatsapp(
+        self, settings, monkeypatch
+    ):
+        """
+        GIVEN ORC_MESSAGING_PLATFORM=whatsapp and ORC_PROMPT_WHATSAPP is set
+              (with ORC_PROMPT_SLACK also set — must NOT enqueue to slack)
         WHEN service.ask() is called
-        THEN no delivery function is called and no error is raised
+        THEN exactly one GatewayMessage with platform=whatsapp is created;
+             telegram send_message is NOT called
         """
+        settings.ORC_MESSAGING_PLATFORM = "whatsapp"
+        settings.ORC_PROMPT_WHATSAPP = "+41791234567"
+        settings.ORC_PROMPT_SLACK = "#general"  # must be ignored
+        settings.ORC_PROMPT_CHAT_ID = ""
+
+        tg_calls, tg_spy = _make_async_spy()
+        import apps.telegram.telegram_api as tg_api
+        monkeypatch.setattr(tg_api, "send_message", tg_spy)
+
+        nonce = connector_service.ask(
+            connector_id="d-wa-1",
+            tool="claude_code",
+            workspace_root="/tmp",
+            question="Deploy to prod?",
+            options=["yes", "no"],
+        )
+
+        assert nonce
+        assert len(tg_calls) == 0
+
+        from apps.gateway.models import GatewayMessage
+        msgs = list(GatewayMessage.objects.all())
+        assert len(msgs) == 1
+        assert msgs[0].platform == "whatsapp"
+        assert msgs[0].recipient == "+41791234567"
+        assert msgs[0].prompt_nonce == nonce
+
+
+# ---------------------------------------------------------------------------
+# notify() delivery routing — WhatsApp
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestNotifyDeliveryWhatsApp:
+    def test_notify_enqueues_gateway_message_for_whatsapp(self, settings, monkeypatch):
+        """
+        GIVEN ORC_MESSAGING_PLATFORM=whatsapp and ORC_PROMPT_WHATSAPP is set
+        WHEN service.notify() is called
+        THEN exactly one GatewayMessage with platform=whatsapp is created;
+             telegram send_message is NOT called
+        """
+        settings.ORC_MESSAGING_PLATFORM = "whatsapp"
+        settings.ORC_PROMPT_WHATSAPP = "+41797654321"
+        settings.ORC_PROMPT_CHAT_ID = ""
+
+        tg_calls, tg_spy = _make_async_spy()
+        import apps.telegram.telegram_api as tg_api
+        monkeypatch.setattr(tg_api, "send_message", tg_spy)
+
+        connector_service.notify(
+            connector_id="n-wa-1",
+            tool="claude_code",
+            workspace_root="/tmp",
+            message="Build complete",
+        )
+
+        assert len(tg_calls) == 0
+
+        from apps.gateway.models import GatewayMessage
+        msgs = list(GatewayMessage.objects.all())
+        assert len(msgs) == 1
+        assert msgs[0].platform == "whatsapp"
+        assert msgs[0].recipient == "+41797654321"
+        assert "Build complete" in msgs[0].text
+
+
+# ---------------------------------------------------------------------------
+# Unconfigured recipient — no send, no exception
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestUnconfiguredRecipient:
+    def test_ask_no_send_when_recipient_empty(self, settings, monkeypatch):
+        """
+        GIVEN ORC_MESSAGING_PLATFORM=telegram but ORC_PROMPT_CHAT_ID is empty
+        WHEN service.ask() is called
+        THEN no send_message call is made and no exception is raised
+        """
+        settings.ORC_MESSAGING_PLATFORM = "telegram"
         settings.ORC_PROMPT_CHAT_ID = ""
 
         tg_calls, tg_spy = _make_async_spy()
@@ -133,3 +263,34 @@ class TestAskDelivery:
 
         assert nonce
         assert len(tg_calls) == 0
+
+        from apps.gateway.models import GatewayMessage
+        assert GatewayMessage.objects.count() == 0
+
+    def test_ask_no_send_when_whatsapp_recipient_empty(self, settings, monkeypatch):
+        """
+        GIVEN ORC_MESSAGING_PLATFORM=whatsapp but ORC_PROMPT_WHATSAPP is empty
+        WHEN service.ask() is called
+        THEN no GatewayMessage is created and no exception is raised
+        """
+        settings.ORC_MESSAGING_PLATFORM = "whatsapp"
+        settings.ORC_PROMPT_WHATSAPP = ""
+        settings.ORC_PROMPT_CHAT_ID = ""
+
+        tg_calls, tg_spy = _make_async_spy()
+        import apps.telegram.telegram_api as tg_api
+        monkeypatch.setattr(tg_api, "send_message", tg_spy)
+
+        nonce = connector_service.ask(
+            connector_id="d-wa-none-1",
+            tool="claude_code",
+            workspace_root="/tmp",
+            question="Silent via WhatsApp?",
+            options=[],
+        )
+
+        assert nonce
+        assert len(tg_calls) == 0
+
+        from apps.gateway.models import GatewayMessage
+        assert GatewayMessage.objects.count() == 0

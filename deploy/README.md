@@ -189,6 +189,35 @@ messages to `/api/gateway/inbound`.  It authenticates with `MESSAGING_GATEWAY_TO
 Only platforms listed in `ENABLED_PLATFORMS` are started; the gateway logs a
 skip message for disabled platforms.
 
+### 5a-0. Single messaging app of choice
+
+ORC routes every session notification and approval prompt to **one** messaging
+app — not all of them at once.  Set `ORC_MESSAGING_PLATFORM` in `.env` to the
+app you want:
+
+```
+ORC_MESSAGING_PLATFORM=telegram   # or: whatsapp | slack | signal | imessage | discord
+```
+
+Then configure **only** that platform's recipient variable:
+
+| Platform   | Recipient variable        | Format |
+|------------|--------------------------|--------|
+| `telegram` | `ORC_PROMPT_CHAT_ID`      | Telegram chat ID |
+| `whatsapp` | `ORC_PROMPT_WHATSAPP`     | International phone number, e.g. `+41791234567` |
+| `slack`    | `ORC_PROMPT_SLACK`        | Channel ID or user ID |
+| `signal`   | `ORC_PROMPT_SIGNAL`       | International phone number |
+| `imessage` | `ORC_PROMPT_IMESSAGE`     | Apple ID email or phone number |
+| `discord`  | `ORC_PROMPT_DISCORD`      | Channel ID |
+
+Telegram is delivered natively by the backend's `run_telegram_bot` command and
+does not need the gateway sidecar.  For all other platforms, also add the
+chosen platform to `ENABLED_PLATFORMS` so the gateway sidecar activates it.
+
+**This is not a broadcast / multi-app fan-out.**  Only the platform named in
+`ORC_MESSAGING_PLATFORM` receives messages — the others are idle even if their
+tokens are present.
+
 ### 5a. WhatsApp (Baileys — unofficial multi-device protocol)
 
 > **Risk notice:** Baileys uses the WhatsApp Web multi-device protocol, which is

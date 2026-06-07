@@ -18,6 +18,18 @@ same library choices, fresh implementation decoupled from the `pi` agent.
 
 ---
 
+## Single messaging app of choice
+
+The backend is configured with a single `ORC_MESSAGING_PLATFORM` setting that
+names the one app where all notifications and approval prompts are delivered.
+`ENABLED_PLATFORMS` in this sidecar should match that choice — if the backend
+is set to `whatsapp`, set `ENABLED_PLATFORMS=whatsapp`.  Running additional
+platforms (e.g. `whatsapp,slack`) is harmless but those extra adapters will
+start, poll, and receive nothing, since the backend only sends to the one
+configured platform.
+
+---
+
 ## Per-platform setup
 
 ### WhatsApp

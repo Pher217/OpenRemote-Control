@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 from apps.gateway import service
 from apps.gateway.auth import GatewayBearerAuthentication, HasGatewayToken
 
-_VALID_PLATFORMS = {"whatsapp", "slack", "discord"}
+_VALID_PLATFORMS = {"whatsapp", "slack", "discord", "signal", "imessage"}
 
 
 class _GatewayTokenNotConfigured(exceptions.APIException):
@@ -25,7 +25,7 @@ class GatewayBaseView(APIView):
 
 
 class OutboxView(GatewayBaseView):
-    """GET /api/gateway/outbox?platform=<whatsapp|slack|discord>&max=20"""
+    """GET /api/gateway/outbox?platform=<whatsapp|slack|discord|signal|imessage>&max=20"""
 
     def get(self, request):
         platform = request.query_params.get("platform", "")

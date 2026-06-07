@@ -1,7 +1,6 @@
 import logging
 
 from asgiref.sync import async_to_sync
-from django.conf import settings
 from django.db.models import Max
 from django.utils import timezone
 
@@ -98,15 +97,23 @@ def _next_sequence(thread: Thread) -> int:
 
 
 def _broadcast_text(text: str) -> None:
-    """Send a plain-text message to every configured surface (best-effort)."""
-    chat_id_str = getattr(settings, "ORC_PROMPT_CHAT_ID", "")
-    if chat_id_str:
-        try:
+    """Send a plain-text message to the single active platform (best-effort)."""
+    from apps.messaging import routing
+
+    recipient = routing.active_recipient()
+    if not recipient:
+        return
+    try:
+        if routing.is_telegram():
             from apps.telegram.telegram_api import send_message
 
-            async_to_sync(send_message)(int(chat_id_str), text)
-        except Exception:
-            logger.exception("connector broadcast: telegram delivery failed (best-effort)")
+            async_to_sync(send_message)(int(recipient), text)
+        else:
+            from apps.gateway.service import enqueue_text
+
+            enqueue_text(routing.active_platform(), recipient, text)
+    except Exception:
+        logger.exception("connector broadcast: delivery failed (best-effort)")
 
 def start_session(
     connector_id: str,
@@ -267,10 +274,14 @@ def result(nonce: str) -> dict:
 
 
 def _deliver(prompt: Prompt) -> None:
-    """Best-effort multi-surface delivery of a prompt. Never raises."""
-    chat_id_str = getattr(settings, "ORC_PROMPT_CHAT_ID", "")
-    if chat_id_str:
-        try:
+    """Best-effort delivery of a prompt to the single active platform. Never raises."""
+    from apps.messaging import routing
+
+    recipient = routing.active_recipient()
+    if not recipient:
+        return
+    try:
+        if routing.is_telegram():
             from apps.telegram.telegram_api import send_message
 
             reply_markup = build_reply_markup(prompt)
@@ -279,36 +290,13 @@ def _deliver(prompt: Prompt) -> None:
                 text = f"{text}\n\n{prompt.body}"
 
             async_to_sync(send_message)(
-                int(chat_id_str),
+                int(recipient),
                 text,
                 reply_markup=reply_markup,
             )
-        except Exception:
-            logger.exception("connector deliver: telegram delivery failed (best-effort)")
-
-    # Gateway surfaces (WhatsApp / Slack / Discord / Signal / iMessage via Node sidecar).
-    _deliver_to_gateway(prompt)
-
-
-def _deliver_to_gateway(prompt: Prompt) -> None:
-    """Enqueue to each configured gateway platform. Best-effort, never raises."""
-    gateway_settings = [
-        ("ORC_PROMPT_WHATSAPP", "whatsapp"),
-        ("ORC_PROMPT_SLACK", "slack"),
-        ("ORC_PROMPT_DISCORD", "discord"),
-        ("ORC_PROMPT_SIGNAL", "signal"),
-        ("ORC_PROMPT_IMESSAGE", "imessage"),
-    ]
-    for setting_name, platform in gateway_settings:
-        recipient = getattr(settings, setting_name, "")
-        if not recipient:
-            continue
-        try:
+        else:
             from apps.gateway.service import enqueue_prompt
 
-            enqueue_prompt(platform, recipient, prompt)
-        except Exception:
-            logger.exception(
-                "connector deliver: gateway delivery failed (best-effort) platform=%s",
-                platform,
-            )
+            enqueue_prompt(routing.active_platform(), recipient, prompt)
+    except Exception:
+        logger.exception("connector deliver: delivery failed (best-effort)")
