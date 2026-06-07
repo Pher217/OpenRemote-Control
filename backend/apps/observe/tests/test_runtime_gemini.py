@@ -151,7 +151,7 @@ def test_extract_session_meta_cross_platform_basename():
         {
             "type": "session_metadata",
             "session_id": "S2",
-            "cwd": r"C:\Users\phil\dev\my-repo",
+            "cwd": r"C:\Users\u\dev\my-repo",
         }
     )
 
