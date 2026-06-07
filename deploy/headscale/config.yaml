@@ -1,0 +1,40 @@
+# deploy/headscale/config.yaml
+# Headscale 0.24.2 configuration
+# Docs: https://headscale.net/ref/configuration/
+
+# Public URL clients will use to reach this headscale instance.
+# Must match the HS_DOMAIN variable in deploy/.env.
+server_url: https://headscale.example.com   # <-- set to https://${HS_DOMAIN}
+
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+
+# SQLite — sufficient for a single-operator mesh.
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+
+# MagicDNS base domain.  Must differ from HS_DOMAIN so DNS resolution is
+# unambiguous.  Nodes resolve each other as <name>.<user>.mesh.internal.
+dns:
+  magic_dns: true
+  base_domain: mesh.internal
+  nameservers:
+    global:
+      - 1.1.1.1
+      - 8.8.8.8
+
+# Use Tailscale's public DERP relays (no self-hosted DERP needed).
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+
+# ACL / policy file path (HuJSON format)
+acls_policy_path: /etc/headscale/policy.hujson
+
+log:
+  level: info
+  format: json

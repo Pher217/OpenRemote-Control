@@ -1,0 +1,41 @@
+---
+# deploy/caddy/docker-compose.yml
+# Bring up: docker compose -f deploy/caddy/docker-compose.yml up -d
+# Must run AFTER the app stack so the orc_app network already exists.
+
+name: orc-caddy
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    env_file: ../.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - app
+      - matrix
+      - headscale
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Join pre-existing networks created by the app, matrix, and headscale stacks.
+  # Start each stack before starting Caddy so these external networks exist.
+  app:
+    name: orc_app
+    external: true
+  matrix:
+    name: orc_matrix
+    external: true
+  headscale:
+    name: orc_headscale
+    external: true

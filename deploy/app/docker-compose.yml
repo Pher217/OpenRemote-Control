@@ -1,0 +1,149 @@
+---
+# deploy/app/docker-compose.yml
+# Bring up: docker compose -f deploy/app/docker-compose.yml up -d
+# Env file:  deploy/.env  (one level up from this file)
+
+name: orc
+
+# ---------------------------------------------------------------------------
+# Shared base for all Django / Celery / management-command services
+# ---------------------------------------------------------------------------
+x-app: &app
+  build:
+    context: ../../backend
+    dockerfile: Dockerfile
+  image: orc-backend:latest
+  env_file: ../.env
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    valkey:
+      condition: service_healthy
+  networks:
+    - app
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # -- Database migration (one-shot) ----------------------------------------
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # no valkey dependency needed for migrations
+
+  # -- Django / Gunicorn web process ----------------------------------------
+  web:
+    <<: *app
+    command: []   # use CMD baked into the image (gunicorn)
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # -- Celery worker ---------------------------------------------------------
+  worker:
+    <<: *app
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency=4"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # -- Long-running management commands --------------------------------------
+  telegram-bot:
+    <<: *app
+    restart: always
+    command: ["python", "manage.py", "run_telegram_bot"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
+  matrix-bot:
+    <<: *app
+    restart: always
+    command: ["python", "manage.py", "run_matrix_bot"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
+  session-observer:
+    <<: *app
+    restart: always
+    command: ["python", "manage.py", "run_session_observer"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
+  # -- PostgreSQL ------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -- Valkey (Redis-compatible) --------------------------------------------
+  valkey:
+    image: valkey/valkey:8
+    restart: unless-stopped
+    command: ["valkey-server", "--bind", "0.0.0.0", "--port", "6379"]
+    volumes:
+      - valkey_data:/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+# ---------------------------------------------------------------------------
+# Volumes & networks
+# ---------------------------------------------------------------------------
+volumes:
+  postgres_data:
+  valkey_data:
+
+networks:
+  app:
+    name: orc_app

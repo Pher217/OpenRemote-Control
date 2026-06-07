@@ -1,0 +1,25 @@
+---
+# deploy/headscale/docker-compose.yml
+# Bring up: docker compose -f deploy/headscale/docker-compose.yml up -d
+# Caddy must be running so TLS termination on HS_DOMAIN works.
+
+name: orc-headscale
+
+services:
+  headscale:
+    image: headscale/headscale:0.24.2
+    restart: unless-stopped
+    command: serve
+    volumes:
+      - ./config.yaml:/etc/headscale/config.yaml:ro
+      - ./policy.hujson:/etc/headscale/policy.hujson:ro
+      - headscale_data:/var/lib/headscale
+    networks:
+      - headscale
+
+volumes:
+  headscale_data:
+
+networks:
+  headscale:
+    name: orc_headscale
