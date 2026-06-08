@@ -4,7 +4,7 @@
 
 AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard.
 
-OpenRemote Control turns every agent session into a chat in the app you already use. Agents **notify** you, **ask** you questions, and **request approval** — and you answer once, from Telegram or Matrix, without hunting down the right machine, terminal, or editor.
+OpenRemote Control turns every agent session into a chat in the app you already use. Agents **notify** you, **ask** you questions, and **request approval** — and you answer once, from your chat app of your choice : Telegram, Whatsapp, Signal, Slack and other. without hunting down the right machine, terminal, or editor.
 
 It's sovereign by design: you host it, your sessions and credentials never leave your infrastructure, and it reaches your tools through official SDKs and the open Model Context Protocol — never browser scraping or vendor hacks.
 
@@ -20,7 +20,7 @@ It's sovereign by design: you host it, your sessions and credentials never leave
    via orc-mcp dispatch              approvals · audit
 ```
 
-You live in **one app you already use** — Telegram, or WhatsApp / Slack / Signal through Matrix bridges. There is no separate inbox to learn. From inside the coding agent you're already working in (Claude Code, Codex, Cursor, …), run the universal command to **dispatch that session to your phone**:
+You live in **one app you already use** — Telegram, or WhatsApp / Slack / Signal through  bridges. There is no separate inbox to learn. From inside the coding agent you're already working in (Claude Code, Codex, Cursor, …), run the universal command to **dispatch that session to your phone**:
 
 ```
 /openremote-control [name]
