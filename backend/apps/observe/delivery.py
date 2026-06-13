@@ -1,5 +1,7 @@
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from django.conf import settings
+from django.core.cache import cache
 
 from apps.messaging import routing
 from apps.observe.formatting import _esc, format_turn
@@ -9,6 +11,9 @@ from apps.telegram.telegram_api import FORUM_ICON_COLORS
 TELEGRAM_MAX = 4096
 # Maximum characters shown in a digest excerpt before truncation.
 _DIGEST_EXCERPT_MAX = 300
+
+_cache_get = sync_to_async(cache.get)
+_cache_set = sync_to_async(cache.set)
 
 
 def pick_color(session_id: str) -> int:
@@ -62,6 +67,20 @@ def _clear_digest_state(thread) -> None:
 async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
     if api is None:
         api = telegram_api
+
+    # Dedup the documented two-path double-delivery (run_session_observer AND the
+    # hostlink daemon both delivering the same session on one host). Key on the
+    # STABLE per-turn uuid: both paths parse the same JSONL so they share it.
+    # record_turn is NOT idempotent (each path creates a distinct Message with a
+    # distinct id/sequence), so msg.id cannot be the cross-path key. When a runtime
+    # provides no uuid (e.g. Codex), skip dedup — matching the observer's own
+    # uuid-only dedup, so distinct turns are never collapsed.
+    turn_uuid = parsed.get("uuid")
+    if turn_uuid:
+        cache_key = f"observe:deliver:{thread.id}:{turn_uuid}"
+        if await _cache_get(cache_key):
+            return
+        await _cache_set(cache_key, True, timeout=30)
 
     mode = getattr(settings, "OBSERVE_DELIVERY_MODE", "progress")
     role = parsed["role"]

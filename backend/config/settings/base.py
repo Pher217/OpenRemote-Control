@@ -4,6 +4,8 @@ from pathlib import Path
 import structlog
 from dotenv import load_dotenv
 
+from apps.observe.validators import validate_observe_delivery_mode
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # Load local secrets (e.g. TELEGRAM_BOT_TOKEN) into os.environ. Reads the
@@ -162,6 +164,7 @@ OBSERVER_RUNTIME = os.environ.get("OBSERVER_RUNTIME", "claude_code")
 # "all"            — post a new silent message per turn (legacy behaviour).
 # "milestones_only"— drop assistant turns entirely; only user turns + session-start notify.
 OBSERVE_DELIVERY_MODE = os.environ.get("OBSERVE_DELIVERY_MODE", "progress")
+validate_observe_delivery_mode(OBSERVE_DELIVERY_MODE)
 # Comma-separated list of runtimes to observe concurrently. Empty => fall back to
 # OBSERVER_RUNTIME (single, legacy). Each runtime resolves its own scan root/glob.
 OBSERVE_RUNTIMES = [
