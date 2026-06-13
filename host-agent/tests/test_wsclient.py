@@ -16,7 +16,7 @@ import pytest
 from agent_host.config import HostConfig
 from agent_host.queue import OfflineQueue
 from agent_host.signing import sign
-from agent_host.wsclient import connect_url, run_sender
+from agent_host.wsclient import connect_url, handle_host_command, run_sender
 
 # ---------------------------------------------------------------------------
 # connect_url tests
@@ -314,6 +314,10 @@ async def test_reconnect_uses_different_nonces(tmp_path):
         async def send(self, data: str) -> None:
             raise ConnectionResetError("server closed connection")
 
+        async def recv(self) -> str:
+            await asyncio.sleep(9999)
+            return ""
+
     connect = _cm_connect(
         [_FailOnSendWs(), _FakeWs()],
         stop_event=stop,
@@ -339,3 +343,168 @@ async def test_reconnect_uses_different_nonces(tmp_path):
         f"Both reconnect attempts used the same nonce ({nonces[0]!r}); "
         "the backend would reject the second attempt with 403."
     )
+
+
+# ---------------------------------------------------------------------------
+# Bidirectional receive loop tests
+# ---------------------------------------------------------------------------
+
+
+class _FrameWs:
+    """Fake WebSocket that yields a sequence of frames from recv(), then raises."""
+
+    def __init__(self, frames: list[str], *, close_exc: Exception | None = None) -> None:
+        self._frames = list(frames)
+        self._close_exc = close_exc or ConnectionResetError("server closed")
+        self.sent: list[dict] = []
+
+    async def send(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def recv(self) -> str:
+        if self._frames:
+            return self._frames.pop(0)
+        raise self._close_exc
+
+
+@pytest.mark.asyncio
+async def test_recv_dispatches_host_command_to_handler(tmp_path):
+    """
+    GIVEN a WebSocket that yields a host_command frame
+    WHEN run_sender() is running
+    THEN the on_command callback is called with the frame.
+    """
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+
+    received_commands: list[dict] = []
+
+    def capture_command(frame: dict) -> None:
+        received_commands.append(frame)
+
+    ping_frame = json.dumps({"type": "host_command", "command": "ping"})
+    fake_ws = _FrameWs([ping_frame])  # yields ping then raises ConnectionResetError
+
+    connect = _cm_connect([fake_ws, _FakeWs()], stop_event=stop, stop_at_attempt=2)
+
+    await run_sender(cfg, queue, connect=connect, stop=stop, on_command=capture_command)
+
+    assert len(received_commands) == 1
+    assert received_commands[0]["type"] == "host_command"
+    assert received_commands[0]["command"] == "ping"
+
+
+@pytest.mark.asyncio
+async def test_recv_malformed_frame_does_not_kill_loop(tmp_path):
+    """
+    GIVEN a WebSocket that yields a malformed JSON frame followed by a valid frame
+    WHEN run_sender() is running
+    THEN the malformed frame is silently ignored and the valid frame is dispatched.
+    """
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+
+    received_commands: list[dict] = []
+
+    def capture_command(frame: dict) -> None:
+        received_commands.append(frame)
+
+    malformed = "this is not json{{{"
+    valid_frame = json.dumps({"type": "host_command", "command": "ping"})
+    fake_ws = _FrameWs([malformed, valid_frame])
+
+    connect = _cm_connect([fake_ws, _FakeWs()], stop_event=stop, stop_at_attempt=2)
+
+    await run_sender(cfg, queue, connect=connect, stop=stop, on_command=capture_command)
+
+    # Only the valid frame should be dispatched; malformed is silently dropped.
+    assert len(received_commands) == 1
+    assert received_commands[0]["command"] == "ping"
+
+
+@pytest.mark.asyncio
+async def test_recv_error_causes_reconnect(tmp_path):
+    """
+    GIVEN a WebSocket whose recv() raises immediately
+    WHEN run_sender() is running
+    THEN the connection exits (gather raises), the outer loop reconnects
+         with a fresh signed URL (different nonce), and run_sender eventually stops.
+    """
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    received_urls: list[str] = []
+
+    # First WS: recv raises immediately → gather tears down sender too → reconnect.
+    # Second WS: stop is set on entry → run_sender exits cleanly.
+    fail_ws = _FrameWs([])  # empty frames list → recv raises ConnectionResetError at once
+    ok_ws = _FakeWs()
+
+    connect = _cm_connect(
+        [fail_ws, ok_ws],
+        stop_event=stop,
+        stop_at_attempt=2,
+        urls=received_urls,
+    )
+
+    await run_sender(cfg, queue, connect=connect, stop=stop)
+
+    # Two connection attempts were made (first failed, second stopped cleanly).
+    assert len(received_urls) >= 2
+    # The two URLs must have different nonces (fresh re-sign on reconnect).
+    nonces = [parse_qs(urlparse(u).query)["nonce"][0] for u in received_urls[:2]]
+    assert nonces[0] != nonces[1]
+
+
+# ---------------------------------------------------------------------------
+# handle_host_command unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_handle_host_command_ping_logs_and_acks():
+    """
+    GIVEN a host_command frame with command="ping" and an outbound queue
+    WHEN handle_host_command is called
+    THEN an ack event is enqueued in the outbound queue.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    frame = {"type": "host_command", "command": "ping"}
+    handle_host_command(frame, incoming_queue=q)
+    assert not q.empty()
+    ack = q.get_nowait()
+    assert ack["type"] == "host_command_ack"
+    assert ack["command"] == "ping"
+
+
+def test_handle_host_command_ping_no_queue_does_not_raise():
+    """
+    GIVEN a host_command frame with command="ping" and no outbound queue
+    WHEN handle_host_command is called
+    THEN it returns without error (ack is skipped gracefully).
+    """
+    frame = {"type": "host_command", "command": "ping"}
+    handle_host_command(frame, incoming_queue=None)  # must not raise
+
+
+def test_handle_host_command_unknown_does_not_raise():
+    """
+    GIVEN a host_command frame with an unknown command
+    WHEN handle_host_command is called
+    THEN it returns without error and does not enqueue anything.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    frame = {"type": "host_command", "command": "unknown_future_command"}
+    handle_host_command(frame, incoming_queue=q)
+    assert q.empty()
+
+
+def test_handle_host_command_pty_inject_does_not_raise():
+    """
+    GIVEN a host_command frame with command="pty.inject" (Phase 4 stub)
+    WHEN handle_host_command is called
+    THEN it returns without error (logged as not implemented).
+    """
+    frame = {"type": "host_command", "command": "pty.inject", "keys": "ls\n"}
+    handle_host_command(frame)  # must not raise

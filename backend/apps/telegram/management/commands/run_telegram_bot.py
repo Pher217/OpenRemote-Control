@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.management.base import BaseCommand
 
 from apps.telegram.service import handle_callback_query, handle_forum_reply, handle_update
@@ -13,6 +14,11 @@ from apps.telegram.telegram_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Cache key for persisting the last processed Telegram update_id.
+# Written after each successful update handling; read at startup to seed the
+# offset so a restart never re-processes updates already handled.
+_LAST_UPDATE_ID_KEY = "telegram:last_update_id"
 
 
 class Command(BaseCommand):
@@ -27,7 +33,14 @@ class Command(BaseCommand):
             return
 
         self.stdout.write("Telegram bot started; polling for updates.")
-        offset = 0
+
+        # Seed offset from the last persisted update_id so a crash/restart does
+        # not replay updates that were already processed.  cache.get returns None
+        # when the key is absent (first run or cache cleared), in which case we
+        # start from 0 (Telegram delivers all pending updates).
+        last_stored = cache.get(_LAST_UPDATE_ID_KEY)
+        offset = (last_stored + 1) if last_stored is not None else 0
+
         while True:
             try:
                 updates = await get_updates(offset)
@@ -37,7 +50,18 @@ class Command(BaseCommand):
                 continue
 
             for update in updates:
-                offset = update["update_id"] + 1
+                update_id = update["update_id"]
+
+                # Guard: never re-process an id we have already handled.
+                # Under normal operation getUpdates with the correct offset
+                # prevents this, but the guard is cheap and crash-safe.
+                if last_stored is not None and update_id <= last_stored:
+                    continue
+
+                # Advance the offset immediately so getUpdates acks this id even
+                # if handling raises below.
+                offset = update_id + 1
+
                 try:
                     if "callback_query" in update:
                         cq = update["callback_query"]
@@ -47,27 +71,35 @@ class Command(BaseCommand):
                             cq.get("data", ""),
                             answer=answer_callback_query,
                         )
-                        continue
-
-                    message = update.get("message")
-                    if not message or "text" not in message:
-                        continue
-                    chat_id = message["chat"]["id"]
-                    text = message["text"]
-                    message_thread_id = message.get("message_thread_id")
-                    from_user_id = message.get("from", {}).get("id")
-                    if message_thread_id is not None:
-                        await handle_forum_reply(
-                            chat_id,
-                            message_thread_id,
-                            from_user_id,
-                            text,
-                            send=send_message,
-                        )
                     else:
-                        await handle_update(chat_id, text, send=send_message)
+                        message = update.get("message")
+                        if not message or "text" not in message:
+                            # Mark handled even for ignored message types.
+                            cache.set(_LAST_UPDATE_ID_KEY, update_id)
+                            last_stored = update_id
+                            continue
+                        chat_id = message["chat"]["id"]
+                        text = message["text"]
+                        message_thread_id = message.get("message_thread_id")
+                        from_user_id = message.get("from", {}).get("id")
+                        if message_thread_id is not None:
+                            await handle_forum_reply(
+                                chat_id,
+                                message_thread_id,
+                                from_user_id,
+                                text,
+                                send=send_message,
+                            )
+                        else:
+                            await handle_update(chat_id, text, send=send_message)
                 except Exception as exc:
                     logger.error(
                         "telegram update handling failed: %s", redact_token(repr(exc))
                     )
-                    continue
+                    # Still persist update_id so a restart doesn't replay the
+                    # failed update indefinitely.
+
+                # Persist after successful handling (or after a handled exception
+                # — we prefer at-most-once delivery over infinite replay).
+                cache.set(_LAST_UPDATE_ID_KEY, update_id)
+                last_stored = update_id
