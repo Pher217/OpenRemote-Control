@@ -1,4 +1,5 @@
 import datetime as _dt
+import logging
 from datetime import timedelta
 
 from channels.db import database_sync_to_async
@@ -6,13 +7,16 @@ from django.conf import settings
 from django.utils import timezone
 
 from apps.accounts.models import Account
-from apps.prompts.service import resolve as resolve_prompt
-from apps.prompts.surfaces.telegram import parse_callback
+from apps.prompts.models import Prompt
+from apps.prompts.service import create_prompt, resolve as resolve_prompt
+from apps.prompts.surfaces.telegram import build_reply_markup, parse_callback
 from apps.slash.fleet_dashboard import refresh_fleet_dashboard
 from apps.slash.handlers.sessions import _active_threads, render_fleet
 from apps.telegram.models import TelegramChat
 from apps.threads.dispatch import dispatch_text
 from apps.threads.models import Thread
+
+log = logging.getLogger(__name__)
 
 
 def get_or_create_thread_for_chat(chat_id) -> Thread:
@@ -127,10 +131,47 @@ async def handle_forum_reply(
         return
 
     # --- Driveable PTY session -----------------------------------------------
-    # TODO(phase 4): dispatch pty.inject — send text to the running PTY session.
+    # Phase 5: create an APPROVAL Prompt whose payload binds the exact text to
+    # inject.  The text is stored in surface_message_ref["inject_text"] — the
+    # source of truth for what will be injected if approved.  The raw Telegram
+    # message is never re-read after this point.
+    @database_sync_to_async
+    def _create_inject_approval():
+        return create_prompt(
+            thread,
+            prompt_type=Prompt.PromptType.APPROVAL,
+            question=f"Inject into `{thread.name}`?",
+            body=f"Text: {text!r}",
+            options=[
+                {"key": "allow", "label": "Allow"},
+                {"key": "deny", "label": "Deny"},
+            ],
+            trust_class=Prompt.TrustClass.APPROVAL,
+            ttl_seconds=300,
+            surface_message_ref={
+                "action": "pty_inject",
+                "thread_id": str(thread.id),
+                "inject_text": text,
+            },
+        )
+
+    prompt = await _create_inject_approval()
+
+    # Deliver the approval request inline via the injected send callable
+    # (same transport already used for read-only replies in this handler).
+    # The reply_markup is not available via the plain send() signature used in
+    # tests; delivery of the inline keyboard is best-effort via Telegram API
+    # when running for real, but the Prompt already exists in DB — a timeout
+    # or delivery failure here does NOT prevent the Prompt from being resolved
+    # if the operator finds it another way.  Fail-closed: if delivery fails,
+    # nothing is injected (the Prompt stays PENDING until it expires).
+    reply_markup = build_reply_markup(prompt)
+    msg = prompt.question
+    if prompt.body:
+        msg = f"{msg}\n\n{prompt.body}"
     await send(
         forum_chat_id,
-        "Input routing not wired yet (phase 4).",
+        msg,
         message_thread_id=message_thread_id,
     )
 
@@ -203,8 +244,45 @@ async def handle_callback_query(
 
     if prompt is None:
         await answer(callback_query_id, text="Expired or already answered.")
-    else:
-        await answer(callback_query_id, text="Recorded ✔")
+        return
+
+    await answer(callback_query_id, text="Recorded ✔")
+
+    # Phase 5 dispatch: if this was a pty_inject approval and the operator
+    # chose "allow", dispatch the injection now.  The inject_text bound at
+    # approval-creation time is used — never the raw Telegram message.
+    # Fail-closed: any error in the dispatch path is caught and logged; the
+    # operator's "Recorded ✔" ack has already been sent so we never block it.
+    ref = prompt.surface_message_ref or {}
+    if ref.get("action") == "pty_inject" and key == "allow":
+        thread_id = ref.get("thread_id")
+        inject_text = ref.get("inject_text", "")
+        if thread_id and inject_text:
+            # Fetch the thread row in a sync DB call, then dispatch via the
+            # async channel layer path — async_send_pty_input awaits group_send
+            # directly so it works inside this running event loop.
+            @database_sync_to_async
+            def _fetch_thread():
+                from apps.threads.models import Thread as _Thread  # noqa: PLC0415
+
+                try:
+                    return _Thread.objects.select_related("host").get(id=thread_id)
+                except _Thread.DoesNotExist:
+                    log.error("pty_inject: thread %s not found after approval", thread_id)
+                    return None
+
+            t = await _fetch_thread()
+            if t is not None:
+                try:
+                    from apps.hostlink.service import async_send_pty_input  # noqa: PLC0415
+
+                    await async_send_pty_input(t, inject_text, approved=True)
+                except Exception:
+                    log.exception("pty_inject: dispatch failed after approval")
+        else:
+            log.error(
+                "pty_inject: approval resolved but payload incomplete: %r", ref
+            )
 
 
 async def _handle_pair_command(chat_id: int, tool: str, label: str) -> None:

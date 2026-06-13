@@ -242,18 +242,21 @@ async def test_forum_reply_pty_session_without_host_is_read_only(settings):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_forum_reply_pty_session_with_host_and_tmux_sends_phase4_stub(settings):
+async def test_forum_reply_pty_session_with_host_and_tmux_creates_approval_prompt(settings):
     """
-    GIVEN a PTY-mode thread with a host and a tmux_session_name
-    WHEN  handle_forum_reply is called
-    THEN  the phase-4 stub reply is sent (injection not yet wired).
+    GIVEN a PTY-mode thread with a host and a tmux_session_name (driveable session)
+    WHEN  handle_forum_reply is called with a reply text
+    THEN  an approval prompt message is sent into that topic (Phase 5 gate),
+          and an APPROVAL Prompt is created in the DB with the reply text bound.
     """
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
 
+    from apps.prompts.models import Prompt
+
     account = await database_sync_to_async(_make_account)("pty1")
     host = await database_sync_to_async(_make_host)("host-pty1")
-    await database_sync_to_async(_make_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         account,
         runtime_mode=Thread.RuntimeModeChoices.PTY,
         topic_id=66,
@@ -265,6 +268,21 @@ async def test_forum_reply_pty_session_with_host_and_tmux_sends_phase4_stub(sett
     send, calls = await _make_send()
     await handle_forum_reply(-100111, 66, 111, "hello", send=send)
 
+    # One approval message delivered to the same topic
     assert len(calls) == 1
     assert calls[0]["message_thread_id"] == 66
-    assert "phase 4" in calls[0]["text"].lower()
+    # The message should mention "inject" (it's an approval request)
+    assert "inject" in calls[0]["text"].lower()
+
+    # An APPROVAL Prompt must be created in DB with the text bound
+    @database_sync_to_async
+    def _get_prompt():
+        return Prompt.objects.filter(
+            thread=thread,
+            prompt_type=Prompt.PromptType.APPROVAL,
+        ).first()
+
+    prompt = await _get_prompt()
+    assert prompt is not None
+    assert prompt.surface_message_ref["action"] == "pty_inject"
+    assert prompt.surface_message_ref["inject_text"] == "hello"

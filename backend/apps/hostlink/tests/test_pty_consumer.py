@@ -191,8 +191,8 @@ class TestPtyFrameHandling:
             assert read_only_msg not in msg, (
                 f"Thread was incorrectly treated as read-only. Messages: {sent_messages}"
             )
-        # The phase-4 placeholder should appear (not the read-only message)
+        # Phase 5: an approval prompt message should be sent (not a phase-4 stub)
         assert any(
-            "phase 4" in m.lower() or "not wired" in m.lower()
+            "inject" in m.lower()
             for m in sent_messages
-        ), f"Expected phase-4 placeholder. Got: {sent_messages}"
+        ), f"Expected an approval prompt message for driveable session. Got: {sent_messages}"
