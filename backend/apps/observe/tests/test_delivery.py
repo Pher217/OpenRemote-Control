@@ -1,11 +1,17 @@
 import pytest
+from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
+from django.core.cache import cache
 from django.test import override_settings
 
 from apps.observe.delivery import TELEGRAM_MAX, _topic_name, deliver_turn, pick_color
 from apps.observe.service import apply_session_meta, get_or_create_observed_thread
+from apps.observe.validators import VALID_DELIVERY_MODES, validate_observe_delivery_mode
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 from apps.threads.models import Thread
+from django.core.exceptions import ImproperlyConfigured
+
+_cache_clear = sync_to_async(cache.clear)
 
 
 class _FakeApi:
@@ -592,3 +598,105 @@ async def test_progress_mode_edit_failure_falls_back_to_fresh_send():
     # Digest id updated to the new message.
     assert new_stored is not None
     assert new_stored != first_stored
+
+
+# ── Tests for delivery mode validation and idempotency guard ────────────────────
+
+
+def test_invalid_observe_delivery_mode_raises():
+    """
+    GIVEN an invalid OBSERVE_DELIVERY_MODE value
+    WHEN validated
+    THEN ImproperlyConfigured is raised with a clear message.
+    """
+    with pytest.raises(ImproperlyConfigured) as exc_info:
+        validate_observe_delivery_mode("invalid_mode")
+    assert "invalid_mode" in str(exc_info.value)
+    assert "OBSERVE_DELIVERY_MODE" in str(exc_info.value)
+
+
+def test_valid_observe_delivery_modes_pass():
+    """
+    GIVEN valid OBSERVE_DELIVERY_MODE values
+    WHEN validated
+    THEN no exception is raised.
+    """
+    for mode in VALID_DELIVERY_MODES:
+        validate_observe_delivery_mode(mode)  # should not raise
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_same_turn_delivered_twice_sends_once():
+    """
+    GIVEN a turn delivered once
+    WHEN the same turn is delivered again within 30s
+    THEN only one telegram send is made.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sidemp01", "/tmp/id1.jsonl"
+    )
+
+    @database_sync_to_async
+    def _pre_create_topic():
+        thread.metadata["telegram_topic_id"] = 4242
+        thread.save(update_fields=["metadata"])
+
+    await _pre_create_topic()
+    await _cache_clear()
+
+    turn = {
+        "role": "assistant",
+        "text": "hello",
+        "uuid": "same-uuid-123",
+        "session_id": "Sidemp01",
+    }
+
+    with override_settings(OBSERVE_DELIVERY_MODE="all"):
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+
+    # Only one send for the turn (no intro because topic pre-created)
+    assert len(fake.send_calls) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_different_turns_delivered_twice_sends_twice():
+    """
+    GIVEN two different turns
+    WHEN both are delivered
+    THEN two telegram sends are made.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sidemp02", "/tmp/id2.jsonl"
+    )
+
+    @database_sync_to_async
+    def _pre_create_topic():
+        thread.metadata["telegram_topic_id"] = 4242
+        thread.save(update_fields=["metadata"])
+
+    await _pre_create_topic()
+    await _cache_clear()
+
+    turn1 = {
+        "role": "assistant",
+        "text": "hello",
+        "uuid": "uuid-1",
+        "session_id": "Sidemp02",
+    }
+    turn2 = {
+        "role": "assistant",
+        "text": "world",
+        "uuid": "uuid-2",
+        "session_id": "Sidemp02",
+    }
+
+    with override_settings(OBSERVE_DELIVERY_MODE="all"):
+        await deliver_turn(thread, turn1, None, forum_chat_id=-100999, api=fake)
+        await deliver_turn(thread, turn2, None, forum_chat_id=-100999, api=fake)
+
+    assert len(fake.send_calls) == 2
