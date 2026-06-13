@@ -293,12 +293,20 @@ async def handle_forum_reply(
     )
 
 
-async def handle_update(chat_id: int, text: str, *, send):
+async def handle_update(chat_id: int, text: str, *, from_user_id: int | None, send):
     if chat_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
         return
 
+    stripped = text.strip()
+    # Privileged fleet/admin commands require the AUTHENTICATED USER in the allowlist,
+    # not merely an allowlisted chat (invariant #9). Fail-closed when from_user_id is
+    # missing or not allowlisted.
+    if stripped.startswith(("/sessions", "/stop", "/run", "/pair")):
+        if from_user_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
+            return
+
     # /sessions — global fleet view (operator-only; auth gate is the check above).
-    if text.strip().startswith("/sessions"):
+    if stripped.startswith("/sessions"):
         threads = await database_sync_to_async(_active_threads)()
         now = _dt.datetime.now(tz=_dt.timezone.utc)
         fleet_text = render_fleet(threads, now)
@@ -307,18 +315,18 @@ async def handle_update(chat_id: int, text: str, *, send):
         return
 
     # /stop <session> — kill a running PTY session (no approval needed; kill switch).
-    if text.strip().startswith("/stop"):
-        await _handle_stop_command(chat_id, text.strip(), send=send)
+    if stripped.startswith("/stop"):
+        await _handle_stop_command(chat_id, stripped, send=send)
         return
 
     # /run <host> <command...> — launch a PTY session (approval-gated).
-    if text.strip().startswith("/run"):
-        await _handle_run_command(chat_id, text.strip(), send=send)
+    if stripped.startswith("/run"):
+        await _handle_run_command(chat_id, stripped, send=send)
         return
 
     # /pair [tool] [label] — create a pairing code and send the QR image.
-    if text.strip().startswith("/pair"):
-        parts = text.strip().split(maxsplit=3)
+    if stripped.startswith("/pair"):
+        parts = stripped.split(maxsplit=3)
         tool = parts[1] if len(parts) > 1 else ""
         label = parts[2] if len(parts) > 2 else ""
         await _handle_pair_command(chat_id, tool, label)
