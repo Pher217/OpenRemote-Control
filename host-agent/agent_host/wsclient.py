@@ -108,8 +108,29 @@ def handle_host_command(frame: dict, incoming_queue: asyncio.Queue | None = None
             except Exception:
                 log.debug("host_command: could not enqueue ping ack")
     elif command == "pty.inject":
-        # TODO Phase 4: call PtySession.send_keys with frame.get("keys", "")
-        log.info("host_command: pty.inject received (not implemented — Phase 4)")
+        session_name = frame.get("session_name", "")
+        text = frame.get("text", "")
+        approved = bool(frame.get("approved", False))
+        if not session_name or not text:
+            log.warning(
+                "host_command: pty.inject missing session_name or text — ignoring"
+            )
+            return
+        try:
+            from agent_host.pty_session import PtySession  # noqa: PLC0415
+
+            PtySession().send_keys(session_name, text, approved=approved)
+            log.info(
+                "host_command: pty.inject delivered to session %r (%d chars)",
+                session_name,
+                len(text),
+            )
+        except PermissionError as exc:
+            log.error("host_command: pty.inject blocked by policy: %s", exc)
+        except KeyError as exc:
+            log.error("host_command: pty.inject unknown session %r: %s", session_name, exc)
+        except Exception:
+            log.exception("host_command: pty.inject raised unexpectedly — recv loop continues")
     else:
         log.warning("host_command: unknown command %r — ignoring", command)
 
