@@ -60,13 +60,25 @@ _DANGEROUS_SHELL_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\brm\s+-rf\b", re.IGNORECASE),
     re.compile(r"\brm\s+-fr\b", re.IGNORECASE),
     # Disk-level write
-    re.compile(r"\bmkfs\b"),
-    re.compile(r"\bdd\s+if="),
+    re.compile(r"\bmkfs\b", re.IGNORECASE),
+    re.compile(r"\bfdisk\b", re.IGNORECASE),
+    # dd is only dangerous with its key=value operands (if=/of=/bs=…); a bare
+    # "dd" token (e.g. "echo dd done") must not be hard-blocked.
+    re.compile(r"\bdd\s+[a-z]+=", re.IGNORECASE),
+    re.compile(r">\s*/dev/sd"),
     re.compile(r"\b>\s*/dev/sd[a-z]"),
     # Fork bomb
     re.compile(r":\s*\(\s*\)\s*\{"),
-    # Sudo (any form)
+    re.compile(r":\(\)\{"),
+    # Sudo / privilege escalation
     re.compile(r"\bsudo\b"),
+    re.compile(r"\bsu\s+-", re.IGNORECASE),
+    re.compile(r"\bchmod\s+[ug+]+s", re.IGNORECASE),
+    re.compile(r"\bchown\s+root\b", re.IGNORECASE),
+    # Mass-kill
+    re.compile(r"\bpkill\b", re.IGNORECASE),
+    re.compile(r"\bkillall\b", re.IGNORECASE),
+    re.compile(r"\bkill\s+-9\s+1\b", re.IGNORECASE),
     # Pipe-to-shell (remote code execution)
     re.compile(r"curl\b.*\|\s*(?:ba)?sh\b"),
     re.compile(r"wget\b.*\|\s*(?:ba)?sh\b"),
