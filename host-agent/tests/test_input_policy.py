@@ -78,13 +78,28 @@ class TestClassifySafe:
         assert result["requires_approval"] is False
         assert result["reasons"] == []
 
+    def test_ls_la(self):
+        result = classify_input("ls -la\n")
+        assert result["risk"] == Risk.SAFE
+        assert result["requires_approval"] is False
+
     def test_git_status_newline(self):
+        result = classify_input("git status\n")
+        assert result["risk"] == Risk.SAFE
+        assert result["requires_approval"] is False
+
+    def test_git_status(self):
         result = classify_input("git status\n")
         assert result["risk"] == Risk.SAFE
         assert result["requires_approval"] is False
 
     def test_plain_word_no_newline(self):
         result = classify_input("echo hello")
+        assert result["risk"] == Risk.SAFE
+        assert result["requires_approval"] is False
+
+    def test_echo_hi(self):
+        result = classify_input("echo hi\n")
         assert result["risk"] == Risk.SAFE
         assert result["requires_approval"] is False
 
@@ -161,8 +176,44 @@ class TestClassifyDangerous:
         result = classify_input(":() { :|:& }; :\n")
         assert result["risk"] == Risk.DANGEROUS
 
+    def test_fork_bomb_no_spaces(self):
+        result = classify_input(":(){ :|:& }; :\n")
+        assert result["risk"] == Risk.DANGEROUS
+
     def test_chmod_777_root(self):
         result = classify_input("chmod 777 /etc\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_chmod_ugs(self):
+        result = classify_input("chmod u+s /bin/bash\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_chown_root(self):
+        result = classify_input("chown root /etc/passwd\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_su_dash(self):
+        result = classify_input("su - root\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_pkill(self):
+        result = classify_input("pkill -f nginx\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_killall(self):
+        result = classify_input("killall python\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_kill_dash_nine_one(self):
+        result = classify_input("kill -9 1\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_fdisk(self):
+        result = classify_input("fdisk /dev/sda\n")
+        assert result["risk"] == Risk.DANGEROUS
+
+    def test_redirect_dev_sd(self):
+        result = classify_input("> /dev/sda\n")
         assert result["risk"] == Risk.DANGEROUS
 
     def test_git_push_force(self):
@@ -407,7 +458,7 @@ class TestPtySessionGate:
 
         # libtmux should NOT be in sys.modules if only input_policy was used.
         # (It might be present if something else in the test suite imported it,
-        # but we can at least confirm input_policy itself doesn't pull it in
+        # but we can at least confirm input_policy itself doesn’t pull it in
         # by ensuring the import above succeeded cleanly in environments where
         # libtmux is missing — which is already proven by this test running at all.)
         # The structural guarantee is in the source: no top-level import of libtmux.
