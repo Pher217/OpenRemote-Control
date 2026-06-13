@@ -1,14 +1,20 @@
 """
-wsclient.py — Authenticated WebSocket sender for the host daemon.
+wsclient.py — Authenticated bidirectional WebSocket client for the host daemon.
 
 connect_url()
     Builds the signed WebSocket URL with a fresh timestamp and nonce.
 
 run_sender()
-    Async loop that connects (with automatic reconnect via websockets'
-    async-for protocol), drains the offline queue, then forwards new events
-    as they arrive.  The *connect* and *stop* parameters are injectable for
-    testing.
+    Async loop that connects (with automatic reconnect), drains the offline
+    queue, then runs a send loop and a receive loop concurrently via
+    asyncio.gather.  A failure in either loop tears both down so the outer
+    reconnect logic re-signs and retries.  The *connect*, *stop*, and
+    *on_command* parameters are injectable for testing.
+
+handle_host_command()
+    Default handler for inbound host_command frames from the backend.
+    Dispatches on frame["command"]: "ping" is acknowledged, unknown commands
+    are logged and ignored.  "pty.inject" is reserved for Phase 4.
 """
 
 from __future__ import annotations
@@ -18,7 +24,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 import websockets
 
@@ -74,22 +80,62 @@ def connect_url(backend_url: str, cfg: HostConfig) -> str:
     return url
 
 
+def handle_host_command(frame: dict, incoming_queue: asyncio.Queue | None = None) -> None:
+    """Default handler for inbound host_command frames from the backend.
+
+    Dispatches on frame["command"]:
+    - "ping": logs receipt and, if an outbound queue is available, enqueues
+      a host_command_ack event so the round-trip is observable.
+    - "pty.inject": reserved for Phase 4 (PTY keystroke injection).
+    - anything else: logged as unknown and ignored.
+
+    Parameters
+    ----------
+    frame:
+        Parsed JSON frame received from the backend.  Must contain at least
+        ``{"type": "host_command", "command": "<name>"}``.
+    incoming_queue:
+        The internal asyncio.Queue used by run_sender to ship outbound events.
+        When provided, a "ping" will enqueue an ack back to the backend.
+    """
+    command = frame.get("command", "")
+    if command == "ping":
+        log.info("host_command: ping received")
+        if incoming_queue is not None:
+            # Enqueue an ack — best-effort, non-blocking (queue is unbounded).
+            try:
+                incoming_queue.put_nowait({"type": "host_command_ack", "command": "ping"})
+            except Exception:
+                log.debug("host_command: could not enqueue ping ack")
+    elif command == "pty.inject":
+        # TODO Phase 4: call PtySession.send_keys with frame.get("keys", "")
+        log.info("host_command: pty.inject received (not implemented — Phase 4)")
+    else:
+        log.warning("host_command: unknown command %r — ignoring", command)
+
+
 async def run_sender(
     cfg: HostConfig,
     queue: OfflineQueue,
     *,
     connect: Any = None,
     stop: asyncio.Event | None = None,
+    on_command: Callable[[dict], None] | None = None,
 ) -> None:
     """Connect to the backend WebSocket and stream queued + incoming events.
 
-    Uses ``async for ws in connect(url)`` which provides automatic
-    exponential-backoff reconnection built into websockets>=13.
+    Runs a send loop and a receive loop concurrently via asyncio.gather so the
+    connection is fully bidirectional.  A failure in either loop propagates
+    through gather (return_exceptions=False), which tears down both coroutines
+    and causes the ``async with`` context to exit — triggering the outer
+    reconnect logic which re-signs a fresh URL.
 
     On each connection:
-    1. Drain the offline queue (synchronously sends buffered events).
-    2. Loop waiting for new events placed into an internal asyncio.Queue
-       by the daemon's poll loop.
+    1. Drain the offline queue (send buffered events to the server).
+    2. Run sender and receiver concurrently until a failure or stop signal.
+       - Sender: waits on the internal asyncio.Queue for new outbound events.
+       - Receiver: waits on ws for inbound frames; dispatches host_command
+         frames to on_command; silently ignores malformed JSON and unknown types.
 
     Events are JSON-encoded before sending.
 
@@ -105,12 +151,18 @@ async def run_sender(
     stop:
         asyncio.Event that, when set, causes the sender to exit cleanly.
         If None, the sender runs until the task is cancelled.
+    on_command:
+        Callback invoked with each inbound host_command frame.
+        Defaults to ``handle_host_command``.  Injectable for tests.
     """
     if connect is None:
         connect = websockets.connect
 
     if stop is None:
         stop = asyncio.Event()
+
+    if on_command is None:
+        on_command = handle_host_command
 
     # Internal queue for new events from the poll loop.
     _incoming: asyncio.Queue[dict] = asyncio.Queue()
@@ -162,18 +214,60 @@ async def run_sender(
                     else:
                         queue._write_all(failed)
 
-                # Stream incoming events until disconnected or stopped.
-                while not stop.is_set():
-                    try:
-                        event = await asyncio.wait_for(_incoming.get(), timeout=1.0)
-                    except TimeoutError:
-                        continue
-                    try:
-                        await ws.send(json.dumps(event))
-                    except Exception:
-                        # Re-queue the event; the outer loop reconnects + re-signs.
-                        queue.enqueue(event)
-                        break
+                # ------------------------------------------------------------------
+                # Concurrent send + receive loops.
+                #
+                # asyncio.gather(sender, receiver, return_exceptions=False) means:
+                #   • If EITHER coroutine raises, gather immediately cancels the
+                #     other and re-raises the exception into the caller.
+                #   • The `async with connect(url) as ws:` block then exits
+                #     (via the exception propagating out of it), closing the
+                #     WebSocket.
+                #   • The outer try/except catches the exception; if stop is set,
+                #     we return; otherwise we back off and reconnect with a fresh
+                #     signed URL.
+                #
+                # The offline queue is NOT lost on reconnect: the sender re-queues
+                # any event that failed to send (via queue.enqueue), which persists
+                # it to disk.  The next connection drains that queue first.
+                # ------------------------------------------------------------------
+
+                async def _sender() -> None:
+                    while not stop.is_set():
+                        try:
+                            event = await asyncio.wait_for(_incoming.get(), timeout=1.0)
+                        except TimeoutError:
+                            continue
+                        try:
+                            await ws.send(json.dumps(event))
+                        except Exception:
+                            # Re-queue the event; the outer loop reconnects + re-signs.
+                            queue.enqueue(event)
+                            raise  # Propagate so gather tears down the receiver too.
+
+                async def _receiver() -> None:
+                    while not stop.is_set():
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                        except TimeoutError:
+                            continue
+                        # A recv error other than timeout propagates naturally,
+                        # which will cause gather to tear down the sender.
+                        try:
+                            frame = json.loads(raw)
+                        except (json.JSONDecodeError, TypeError):
+                            log.debug("ws recv: malformed frame — ignoring")
+                            continue
+                        if not isinstance(frame, dict):
+                            continue
+                        if frame.get("type") == "host_command":
+                            try:
+                                on_command(frame)
+                            except Exception:
+                                log.exception("on_command raised — ignoring")
+                        # All other types are silently ignored.
+
+                await asyncio.gather(_sender(), _receiver())
 
                 if stop.is_set():
                     return
