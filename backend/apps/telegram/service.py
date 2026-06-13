@@ -1,3 +1,4 @@
+import datetime as _dt
 from datetime import timedelta
 
 from channels.db import database_sync_to_async
@@ -7,6 +8,8 @@ from django.utils import timezone
 from apps.accounts.models import Account
 from apps.prompts.service import resolve as resolve_prompt
 from apps.prompts.surfaces.telegram import parse_callback
+from apps.slash.fleet_dashboard import refresh_fleet_dashboard
+from apps.slash.handlers.sessions import _active_threads, render_fleet
 from apps.telegram.models import TelegramChat
 from apps.threads.dispatch import dispatch_text
 from apps.threads.models import Thread
@@ -134,6 +137,15 @@ async def handle_forum_reply(
 
 async def handle_update(chat_id: int, text: str, *, send):
     if chat_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
+        return
+
+    # /sessions — global fleet view (operator-only; auth gate is the check above).
+    if text.strip().startswith("/sessions"):
+        threads = await database_sync_to_async(_active_threads)()
+        now = _dt.datetime.now(tz=_dt.timezone.utc)
+        fleet_text = render_fleet(threads, now)
+        await send(chat_id, fleet_text, parse_mode="HTML")
+        await refresh_fleet_dashboard()
         return
 
     # /pair [tool] [label] — create a pairing code and send the QR image.

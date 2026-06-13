@@ -135,6 +135,25 @@ async def send_photo(
         resp.raise_for_status()
 
 
+async def pin_chat_message(chat_id, message_id, *, disable_notification: bool = True) -> bool:
+    """Pin a message in a chat.  Returns True on success, False on failure.
+
+    disable_notification=True is the default so pinning the dashboard does not
+    spam all forum members.
+    """
+    payload: dict = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "disable_notification": disable_notification,
+    }
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/pinChatMessage",
+            json=payload,
+        )
+        return resp.is_success
+
+
 async def get_updates(offset, timeout=50):
     async with httpx.AsyncClient(
         timeout=httpx.Timeout(connect=5.0, read=timeout + 10, write=5.0, pool=5.0)
