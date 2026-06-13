@@ -259,6 +259,36 @@ class TestClassifyDangerous:
 
 
 # ---------------------------------------------------------------------------
+# classify_input — NFKC obfuscation hardening
+# ---------------------------------------------------------------------------
+
+class TestClassifyDangerousNFKC:
+    def test_fullwidth_rm_rf(self):
+        result = classify_input("ｒｍ －ｒｆ /\n")
+        assert result["risk"] == Risk.DANGEROUS
+        assert result["requires_approval"] is True
+        assert any("dangerous shell pattern" in r for r in result["reasons"])
+
+    def test_fullwidth_sudo(self):
+        result = classify_input("ｓｕｄｏ apt remove\n")
+        assert result["risk"] == Risk.DANGEROUS
+        assert result["requires_approval"] is True
+        assert any("dangerous shell pattern" in r for r in result["reasons"])
+
+    def test_plain_ascii_ls_still_safe(self):
+        result = classify_input("ls\n")
+        assert result["risk"] == Risk.SAFE
+        assert result["requires_approval"] is False
+        assert result["reasons"] == []
+
+    def test_plain_ascii_git_status_still_safe(self):
+        result = classify_input("git status\n")
+        assert result["risk"] == Risk.SAFE
+        assert result["requires_approval"] is False
+        assert result["reasons"] == []
+
+
+# ---------------------------------------------------------------------------
 # classify_input — REVIEW cases
 # ---------------------------------------------------------------------------
 
@@ -458,7 +488,7 @@ class TestPtySessionGate:
 
         # libtmux should NOT be in sys.modules if only input_policy was used.
         # (It might be present if something else in the test suite imported it,
-        # but we can at least confirm input_policy itself doesn’t pull it in
+        # but we can at least confirm input_policy itself doesn't pull it in
         # by ensuring the import above succeeded cleanly in environments where
         # libtmux is missing — which is already proven by this test running at all.)
         # The structural guarantee is in the source: no top-level import of libtmux.

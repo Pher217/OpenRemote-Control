@@ -204,6 +204,11 @@ def classify_input(text: str) -> dict:  # type: ignore[type-arg]
     """
     reasons: list[str] = []
 
+    # NFKC-normalize so unicode/fullwidth/compatibility-form obfuscation of a dangerous
+    # command collapses to its ASCII equivalent before pattern matching. Control-character
+    # detection still runs on the ORIGINAL text (normalization must not mask raw control bytes).
+    normalized = unicodedata.normalize("NFKC", text)
+
     # --- DANGEROUS checks (highest priority) ---
 
     # 1. Raw control / escape sequences
@@ -212,13 +217,13 @@ def classify_input(text: str) -> dict:  # type: ignore[type-arg]
         return {"risk": Risk.DANGEROUS, "reasons": reasons, "requires_approval": True}
 
     # 2. Destructive shell patterns
-    dangerous_shell = _contains_dangerous_shell(text)
+    dangerous_shell = _contains_dangerous_shell(normalized)
     if dangerous_shell:
         reasons.extend(dangerous_shell)
         return {"risk": Risk.DANGEROUS, "reasons": reasons, "requires_approval": True}
 
     # 3. Workspace escape
-    escape_reasons = _contains_escape(text)
+    escape_reasons = _contains_escape(normalized)
     if escape_reasons:
         reasons.extend(escape_reasons)
         return {"risk": Risk.DANGEROUS, "reasons": reasons, "requires_approval": True}
@@ -237,7 +242,7 @@ def classify_input(text: str) -> dict:  # type: ignore[type-arg]
         return {"risk": Risk.REVIEW, "reasons": reasons, "requires_approval": True}
 
     # 6. Shell chaining / backgrounding metacharacters
-    if _contains_chain_meta(text):
+    if _contains_chain_meta(normalized):
         reasons.append("contains shell chaining or redirect metacharacters (&&, ||, |, ;, `, $(), >, >>)")
         return {"risk": Risk.REVIEW, "reasons": reasons, "requires_approval": True}
 
