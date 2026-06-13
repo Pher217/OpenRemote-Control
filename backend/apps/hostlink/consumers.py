@@ -6,6 +6,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.conf import settings
 from django.core.cache import cache
+from django.utils import timezone
 
 from apps.hostlink import security
 from apps.hostlink.models import HostToken
@@ -18,6 +19,7 @@ from apps.observe.service import (
     record_turn,
 )
 from apps.telegram.telegram_api import redact_token
+from apps.threads.models import Thread
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,8 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         # Per-file remembered session id, for runtimes whose turn lines carry no
         # session id of their own (Codex/Gemini) — mirrors the observer's file_state.
         self._file_sessions: dict[str, str] = {}
+        # Per-PTY-session thread id cache: session_name -> str(thread.id)
+        self._pty_threads: dict[str, str] = {}
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
@@ -102,6 +106,12 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             await self._handle_session_event(content.get("data", {}))
         elif msg_type == "session.line":
             await self._handle_session_line(content.get("data", {}))
+        elif msg_type == "session.pty_start":
+            await self._handle_pty_start(content.get("data", {}))
+        elif msg_type == "session.pty_output":
+            await self._handle_pty_output(content.get("data", {}))
+        elif msg_type == "session.pty_end":
+            await self._handle_pty_end(content.get("data", {}))
         # Unknown message types are silently ignored.
 
     async def _handle_session_event(self, data: dict):
@@ -173,6 +183,78 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         if parsed:
             await record_turn(thread, parsed["role"], parsed["text"])
             await self._deliver_to_telegram(thread, parsed)
+
+    # ------------------------------------------------------------------
+    # PTY frame handlers
+    # ------------------------------------------------------------------
+
+    async def _handle_pty_start(self, data: dict):
+        session_name = data.get("session_name", "")
+        command = data.get("command", "")
+        cwd = data.get("cwd", "")
+        if not session_name:
+            return
+        thread = await database_sync_to_async(self._get_or_create_pty_thread)(
+            session_name, command, cwd
+        )
+        self._pty_threads[session_name] = str(thread.id)
+
+    async def _handle_pty_output(self, data: dict):
+        session_name = data.get("session_name", "")
+        text = data.get("text", "")
+        if not session_name or not text:
+            return
+        thread_id = self._pty_threads.get(session_name)
+        if thread_id is None:
+            return
+        thread = await database_sync_to_async(Thread.objects.get)(id=thread_id)
+        parsed = {"role": "assistant", "text": text, "session_id": session_name}
+        await record_turn(thread, "assistant", text)
+        await self._deliver_to_telegram(thread, parsed)
+
+    async def _handle_pty_end(self, data: dict):
+        session_name = data.get("session_name", "")
+        if not session_name:
+            return
+        thread_id = self._pty_threads.get(session_name)
+        if thread_id is None:
+            return
+        await database_sync_to_async(Thread.objects.filter(id=thread_id).update)(
+            status=Thread.StatusChoices.COMPLETED
+        )
+        self._pty_threads.pop(session_name, None)
+
+    def _get_or_create_pty_thread(self, session_name: str, command: str, cwd: str):
+        """Synchronous helper — must be called via database_sync_to_async."""
+        from apps.accounts.models import Account  # noqa: PLC0415
+
+        account, _ = Account.objects.get_or_create(
+            provider="pty",
+            label="orc-run",
+            defaults={"auth_type": "none", "credential_type": "none"},
+        )
+        existing = Thread.objects.filter(external_session_ref=session_name).first()
+        if existing is not None:
+            # Stamp host if not already set
+            if existing.host_id != self.host.id:
+                existing.host = self.host
+                existing.save(update_fields=["host"])
+            return existing
+        return Thread.objects.create(
+            external_session_ref=session_name,
+            name=f"orc-run: {command[:80]}",
+            runtime="pty",
+            runtime_mode=Thread.RuntimeModeChoices.PTY,
+            host=self.host,
+            account=account,
+            status=Thread.StatusChoices.RUNNING,
+            started_at=timezone.now(),
+            metadata={
+                "tmux_session_name": session_name,
+                "command": command,
+                "cwd": cwd,
+            },
+        )
 
     async def _deliver_to_telegram(self, thread, parsed):
         """Forward an observed turn from a remote host to the Telegram forum.

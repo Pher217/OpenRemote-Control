@@ -42,6 +42,12 @@ def _cmd_daemon(args: argparse.Namespace) -> None:
     run(cfg, runtimes=runtimes, poll_interval=args.poll_interval)
 
 
+def _cmd_run(args: argparse.Namespace) -> None:
+    from agent_host.run_cmd import cmd_run
+
+    cmd_run(args)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="orc-host",
@@ -69,12 +75,20 @@ def main() -> None:
         help="Seconds between file-discovery polls (default: 2.0)",
     )
 
+    # --- run ---
+    run_p = sub.add_parser("run", help="Launch a command in a PTY session and stream output")
+    run_p.add_argument("command", nargs="+", help="Command to run (e.g. claude)")
+    run_p.add_argument("--name", default=None, help="Session name (auto-generated if omitted)")
+    run_p.add_argument("--cwd", default=None, help="Working directory for the PTY session")
+
     args = parser.parse_args()
 
     if args.command == "enroll":
         _cmd_enroll(args)
     elif args.command == "daemon":
         _cmd_daemon(args)
+    elif args.command == "run":
+        _cmd_run(args)
 
 
 if __name__ == "__main__":
