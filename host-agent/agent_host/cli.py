@@ -53,7 +53,10 @@ def main() -> None:
         prog="orc-host",
         description="OpenRemote Control host-agent daemon",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    # dest must NOT be "command": the `run` subcommand has a positional named
+    # "command", and a shared dest would let that positional overwrite the
+    # chosen subcommand name (so `orc-host run …` would dispatch to nothing).
+    sub = parser.add_subparsers(dest="subcommand", required=True)
 
     # --- enroll ---
     enroll_p = sub.add_parser("enroll", help="Enroll this host with the backend")
@@ -83,11 +86,11 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    if args.command == "enroll":
+    if args.subcommand == "enroll":
         _cmd_enroll(args)
-    elif args.command == "daemon":
+    elif args.subcommand == "daemon":
         _cmd_daemon(args)
-    elif args.command == "run":
+    elif args.subcommand == "run":
         _cmd_run(args)
 
 

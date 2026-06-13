@@ -57,3 +57,36 @@ def test_python_m_agent_host_cli_no_args_exits_nonzero():
         "Expected non-zero exit for missing subcommand, "
         f"got 0 (stdout={result.stdout!r})"
     )
+
+
+def test_run_subcommand_dispatches_to_cmd_run(monkeypatch):
+    """
+    GIVEN `orc-host run echo hi` on argv
+    WHEN main() parses and dispatches
+    THEN run_cmd.cmd_run is called with args.command == ["echo", "hi"].
+
+    Regression: the subparsers dest was "command", colliding with the `run`
+    subcommand's own positional "command" — the positional overwrote the chosen
+    subcommand, so `args.command` became the command list and NO dispatch branch
+    matched. `orc-host run …` silently no-opped (exit 0, nothing launched).
+    The unit tests for run only called cmd_run/run_pty directly, bypassing the
+    argparse dispatch, so the collision was invisible until a live smoke test.
+    """
+    import agent_host.cli as cli
+    import agent_host.run_cmd as run_cmd
+
+    captured: dict = {}
+
+    def _fake_cmd_run(args):
+        captured["command"] = args.command
+        captured["name"] = args.name
+        captured["cwd"] = args.cwd
+
+    monkeypatch.setattr(run_cmd, "cmd_run", _fake_cmd_run)
+    monkeypatch.setattr(sys, "argv", ["orc-host", "run", "echo", "hi"])
+
+    cli.main()
+
+    assert captured.get("command") == ["echo", "hi"], (
+        f"run did not dispatch to cmd_run with the command list; captured={captured!r}"
+    )
