@@ -94,7 +94,7 @@ class PtySession:
 
         kwargs: dict = {
             "session_name": name,
-            "detach": True,
+            "attach": False,
             "window_command": command,
         }
         if cwd is not None:
@@ -108,26 +108,35 @@ class PtySession:
         No-op if the session does not exist.
         """
         server = self._server()
-        session = server.find_where({"session_name": name})
+        session = server.sessions.get(session_name=name, default=None)
         if session is not None:
-            session.kill_session()
+            session.kill()
 
     def exists(self, name: str) -> bool:
         """Return ``True`` if a session named *name* currently exists."""
         server = self._server()
-        return server.find_where({"session_name": name}) is not None
+        return server.sessions.get(session_name=name, default=None) is not None
 
     # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
 
-    def capture(self, name: str) -> str:
-        """Return a plain-text snapshot of the session's visible pane content.
+    def capture(self, name: str, history: int = 2000) -> str:
+        """Return a plain-text snapshot of the session pane including scrollback.
+
+        Uses ``capture-pane -p -S -<history>`` to include up to *history* lines
+        of scrollback above the visible screen.  This makes the captured text
+        grow append-only as output scrolls past the visible pane height, which
+        is required for a correct line-based diff in the streaming loop.
 
         Parameters
         ----------
         name:
             Session name to capture.
+        history:
+            Number of scrollback lines to include above the visible screen.
+            Defaults to 2000.  Set to 0 to capture the visible screen only
+            (reproduces the old behaviour, not recommended for streaming).
 
         Raises
         ------
@@ -135,12 +144,12 @@ class PtySession:
             If the session does not exist.
         """
         server = self._server()
-        session = server.find_where({"session_name": name})
+        session = server.sessions.get(session_name=name, default=None)
         if session is None:
             raise KeyError(f"PTY session {name!r} not found")
 
-        pane = session.attached_window.attached_pane
-        return "\n".join(pane.cmd("capture-pane", "-p").stdout)
+        pane = session.active_window.active_pane
+        return "\n".join(pane.cmd("capture-pane", "-p", "-S", f"-{history}").stdout)
 
     def send_keys(
         self,
@@ -204,11 +213,11 @@ class PtySession:
 
         # --- Gate passed; proceed with tmux injection ---
         server = self._server()
-        session = server.find_where({"session_name": name})
+        session = server.sessions.get(session_name=name, default=None)
         if session is None:
             raise KeyError(f"PTY session {name!r} not found")
 
-        pane = session.attached_window.attached_pane
+        pane = session.active_window.active_pane
         # suppress_history=False keeps the command in the shell's history
         # which aids auditability.
         pane.send_keys(text, enter=False, suppress_history=False)
