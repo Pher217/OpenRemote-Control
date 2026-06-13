@@ -24,7 +24,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Coroutine
 
 import websockets
 
@@ -80,13 +80,20 @@ def connect_url(backend_url: str, cfg: HostConfig) -> str:
     return url
 
 
-def handle_host_command(frame: dict, incoming_queue: asyncio.Queue | None = None) -> None:
+def handle_host_command(
+    frame: dict,
+    incoming_queue: asyncio.Queue | None = None,
+    *,
+    _session_start_task_factory: Callable | None = None,
+) -> None:
     """Default handler for inbound host_command frames from the backend.
 
     Dispatches on frame["command"]:
     - "ping": logs receipt and, if an outbound queue is available, enqueues
       a host_command_ack event so the round-trip is observable.
     - "pty.inject": reserved for Phase 4 (PTY keystroke injection).
+    - "session.kill": kill a named tmux session (Fleet F3 /stop).
+    - "session.start": launch a new PTY session and stream output (Fleet F3 /run).
     - anything else: logged as unknown and ignored.
 
     Parameters
@@ -97,6 +104,10 @@ def handle_host_command(frame: dict, incoming_queue: asyncio.Queue | None = None
     incoming_queue:
         The internal asyncio.Queue used by run_sender to ship outbound events.
         When provided, a "ping" will enqueue an ack back to the backend.
+    _session_start_task_factory:
+        Injectable for testing the session.start branch.  Receives the ws
+        reference (None in the sync handler context) and the coroutine;
+        defaults to creating an asyncio task on the running loop.
     """
     command = frame.get("command", "")
     if command == "ping":
@@ -131,8 +142,166 @@ def handle_host_command(frame: dict, incoming_queue: asyncio.Queue | None = None
             log.error("host_command: pty.inject unknown session %r: %s", session_name, exc)
         except Exception:
             log.exception("host_command: pty.inject raised unexpectedly — recv loop continues")
+    elif command == "session.kill":
+        # Fleet F3 /stop: kill a named tmux session.  No approval required —
+        # stopping is a kill-switch; it must always be reachable for an
+        # authenticated operator.  Identity gate is enforced on the backend.
+        session_name = frame.get("session_name", "")
+        if not session_name:
+            log.warning("host_command: session.kill missing session_name — ignoring")
+            return
+        try:
+            from agent_host.pty_session import PtySession  # noqa: PLC0415
+
+            PtySession().kill(session_name)
+            log.info("host_command: session.kill terminated session %r", session_name)
+        except Exception:
+            log.exception("host_command: session.kill raised unexpectedly — recv loop continues")
+    elif command == "session.start":
+        # Fleet F3 /run: start a new PTY session and stream output over the
+        # existing WebSocket connection.  The command and cwd are bound in the
+        # APPROVAL Prompt on the backend and forwarded here verbatim — never
+        # re-read from any Telegram message.
+        session_name = frame.get("session_name", "")
+        command_str = frame.get("command_str", "")
+        cwd = frame.get("cwd") or None
+        if not session_name or not command_str:
+            log.warning(
+                "host_command: session.start missing session_name or command_str — ignoring"
+            )
+            return
+        # session.start is handled asynchronously: we need to launch a tmux
+        # session AND run the blocking stream loop on the same WebSocket.  We
+        # schedule it as a task on the running event loop so it doesn't block
+        # the recv loop (handle_host_command is synchronous).
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            log.error(
+                "host_command: session.start called outside running event loop — ignoring"
+            )
+            return
+
+        async def _start_and_stream() -> None:
+            try:
+                from agent_host.pty_session import PtySession  # noqa: PLC0415
+                from agent_host.pty_stream import stream_pty_output  # noqa: PLC0415
+
+                pty = PtySession()
+                pty.start(session_name, command_str, cwd)
+                log.info(
+                    "host_command: session.start launched %r command=%r cwd=%r",
+                    session_name,
+                    command_str,
+                    cwd,
+                )
+            except Exception:
+                log.exception(
+                    "host_command: session.start failed to launch session %r", session_name
+                )
+                return
+
+            # The ws reference is not accessible here (handle_host_command is
+            # sync and doesn't receive the ws).  We enqueue pty_start and then
+            # stream via incoming_queue (the outbound queue).  This mirrors what
+            # run_cmd.run_pty does over a dedicated WebSocket, but here we
+            # route through the daemon's existing persistent connection via the
+            # inline outbound queue.
+            if incoming_queue is not None:
+                import json as _json  # noqa: PLC0415
+
+                try:
+                    incoming_queue.put_nowait({
+                        "type": "session.pty_start",
+                        "data": {
+                            "session_name": session_name,
+                            "command": command_str,
+                            "cwd": cwd or "",
+                        },
+                    })
+                except Exception:
+                    log.exception("host_command: session.start failed to enqueue pty_start")
+
+                # Stream output via the queue (not a raw ws.send call).
+                await _stream_via_queue(incoming_queue, pty, session_name)
+            else:
+                log.warning(
+                    "host_command: session.start: no incoming_queue — output will not be streamed"
+                )
+
+        if _session_start_task_factory is not None:
+            _session_start_task_factory(_start_and_stream())
+        else:
+            loop.create_task(_start_and_stream())
     else:
         log.warning("host_command: unknown command %r — ignoring", command)
+
+
+async def _stream_via_queue(outbound_queue: asyncio.Queue, pty: Any, session_name: str) -> None:
+    """Stream PTY output as queue events (for the daemon's persistent WebSocket).
+
+    This is the daemon-side streaming path for ``session.start``.  Instead of
+    calling ``ws.send`` directly (which would require a ws reference), we
+    enqueue ``session.pty_output`` and ``session.pty_end`` dicts so the
+    daemon's existing ``_sender`` loop forwards them over the live connection.
+
+    The logic mirrors ``pty_stream.stream_pty_output`` but routes through the
+    queue instead of a raw ws.
+    """
+    import asyncio as _asyncio  # noqa: PLC0415 — stdlib
+
+    from agent_host.pty_stream import strip_ansi  # noqa: PLC0415
+
+    sent_lines: int = 0
+
+    def _try_capture() -> str | None:
+        try:
+            return pty.capture(session_name)
+        except KeyError:
+            return None
+
+    def _enqueue_diff(raw: str) -> None:
+        nonlocal sent_lines
+        content = strip_ansi(raw).rstrip()
+        lines = content.split("\n") if content else []
+        if len(lines) < sent_lines:
+            sent_lines = len(lines)
+            return
+        new_lines = lines[sent_lines:]
+        if new_lines:
+            new_text = "\n".join(new_lines)
+            if new_text.strip():
+                try:
+                    outbound_queue.put_nowait({
+                        "type": "session.pty_output",
+                        "data": {
+                            "session_name": session_name,
+                            "text": new_text,
+                        },
+                    })
+                except Exception:
+                    log.warning("_stream_via_queue: could not enqueue pty_output — continuing")
+        sent_lines = len(lines)
+
+    while pty.exists(session_name):
+        raw = _try_capture()
+        if raw is not None:
+            _enqueue_diff(raw)
+        await _asyncio.sleep(1.0)
+
+    # Final capture
+    raw = _try_capture()
+    if raw is not None:
+        _enqueue_diff(raw)
+
+    # pty_end
+    try:
+        outbound_queue.put_nowait({
+            "type": "session.pty_end",
+            "data": {"session_name": session_name},
+        })
+    except Exception:
+        log.warning("_stream_via_queue: could not enqueue pty_end")
 
 
 async def run_sender(

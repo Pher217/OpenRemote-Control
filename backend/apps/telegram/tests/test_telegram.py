@@ -114,22 +114,21 @@ async def test_non_allowlisted_ignored(monkeypatch, settings):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_slash_stop(monkeypatch, settings):
+async def test_slash_stop_no_args_shows_usage(monkeypatch, settings):
+    """
+    GIVEN an allowlisted operator sends /stop with no session argument
+    WHEN handle_update processes the message
+    THEN a Usage reply is sent and no threads are modified.
+    """
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
-    monkeypatch.setattr("apps.tier2.ollama.httpx.AsyncClient", _FakeOllamaClient)
-
-    thread = await database_sync_to_async(get_or_create_thread_for_chat)(12345)
 
     sent = []
 
-    async def cap(cid, txt):
+    async def cap(cid, txt, **kwargs):
         sent.append((cid, txt))
 
     await handle_update(12345, "/stop", send=cap)
 
-    @database_sync_to_async
-    def _status():
-        return Thread.objects.get(id=thread.id).status
-
-    assert await _status() == Thread.StatusChoices.STOPPED
-    assert sent == [(12345, "Thread stopped.")]
+    assert len(sent) == 1
+    assert sent[0][0] == 12345
+    assert "Usage" in sent[0][1]

@@ -1,12 +1,16 @@
 import datetime as _dt
 import logging
+import uuid
 from datetime import timedelta
 
 from channels.db import database_sync_to_async
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from apps.accounts.models import Account
+from apps.audit.models import AuditEvent
+from apps.hosts.models import Host
 from apps.prompts.models import Prompt
 from apps.prompts.service import create_prompt, resolve as resolve_prompt
 from apps.prompts.surfaces.telegram import build_reply_markup, parse_callback
@@ -73,6 +77,122 @@ def _lookup_thread_for_topic(forum_chat_id: int, message_thread_id: int):
             metadata__telegram_forum_chat_id=forum_chat_id,
         )
         .first()
+    )
+
+
+@database_sync_to_async
+def _resolve_host(host_arg: str):
+    """Resolve a host by slug or name (case-insensitive). Returns Host or None."""
+    return (
+        Host.objects.filter(slug__iexact=host_arg).first()
+        or Host.objects.filter(name__iexact=host_arg).first()
+    )
+
+
+@database_sync_to_async
+def _list_host_slugs():
+    """Return a sorted list of all host slugs (for error messages)."""
+    return sorted(Host.objects.values_list("slug", flat=True))
+
+
+@database_sync_to_async
+def _resolve_pty_thread_for_stop(session_arg: str):
+    """Resolve a running PTY Thread by tmux_session_name or thread UUID prefix.
+
+    Returns (thread, error_message).  On success thread is a Thread instance
+    and error_message is None.  On failure thread is None and error_message
+    describes the problem.
+    """
+    # Try exact tmux_session_name match first.
+    qs = Thread.objects.select_related("host").filter(
+        runtime_mode=Thread.RuntimeModeChoices.PTY,
+        status=Thread.StatusChoices.RUNNING,
+        metadata__tmux_session_name=session_arg,
+    )
+    results = list(qs[:2])
+    if len(results) == 1:
+        return results[0], None
+    if len(results) > 1:
+        return None, f"Ambiguous: multiple running sessions named {session_arg!r}. Use the thread id."
+
+    # Try UUID prefix match (short thread id).
+    try:
+        # Allow full UUID or a prefix of at least 8 hex chars.
+        prefix = session_arg.replace("-", "").lower()
+        if len(prefix) < 8:
+            return None, f"Session identifier {session_arg!r} is too short — use tmux session name or full thread id."
+        # Fetch all running PTY threads and filter by UUID hex prefix.
+        candidates = [
+            t for t in Thread.objects.select_related("host").filter(
+                runtime_mode=Thread.RuntimeModeChoices.PTY,
+                status=Thread.StatusChoices.RUNNING,
+            )
+            if str(t.id).replace("-", "").startswith(prefix)
+        ]
+        if len(candidates) == 1:
+            return candidates[0], None
+        if len(candidates) > 1:
+            return None, "Ambiguous: multiple sessions match that id prefix. Use the full thread id."
+    except Exception:
+        pass
+
+    return None, f"No running PTY session found for {session_arg!r}."
+
+
+@database_sync_to_async
+def _stop_thread(thread_id, actor: str):
+    """Mark a thread as STOPPED and write an audit event. Returns True on success."""
+    with transaction.atomic():
+        updated = Thread.objects.filter(
+            id=thread_id,
+            status=Thread.StatusChoices.RUNNING,
+        ).update(status=Thread.StatusChoices.STOPPED, ended_at=timezone.now())
+        if updated:
+            AuditEvent.objects.create(
+                thread_id=thread_id,
+                actor=actor,
+                event_type=AuditEvent.EventTypeChoices.RUNTIME_STOP,
+                redacted_payload={"source": "telegram_stop"},
+            )
+    return updated > 0
+
+
+@database_sync_to_async
+def _create_session_start_prompt(thread, host, command: str, cwd: str, session_name: str):
+    """Create an APPROVAL Prompt binding the session.start parameters."""
+    return create_prompt(
+        thread,
+        prompt_type=Prompt.PromptType.APPROVAL,
+        question=f"Launch on {host.slug}?",
+        body=f"Command: {command!r}\nCwd: {cwd or '(default)'}",
+        options=[
+            {"key": "allow", "label": "Allow"},
+            {"key": "deny", "label": "Deny"},
+        ],
+        trust_class=Prompt.TrustClass.APPROVAL,
+        ttl_seconds=300,
+        surface_message_ref={
+            "action": "session_start",
+            "host_id": str(host.id),
+            "command": command,
+            "cwd": cwd,
+            "session_name": session_name,
+        },
+    )
+
+
+@database_sync_to_async
+def _audit_session_start_request(actor: str, host_id: str, command: str):
+    """Write an APPROVAL_REQUEST audit event for a /run command."""
+    AuditEvent.objects.create(
+        thread=None,
+        actor=actor,
+        event_type=AuditEvent.EventTypeChoices.APPROVAL_REQUEST,
+        redacted_payload={
+            "source": "telegram_run",
+            "host_id": host_id,
+            "command": command,
+        },
     )
 
 
@@ -189,6 +309,16 @@ async def handle_update(chat_id: int, text: str, *, send):
         await refresh_fleet_dashboard()
         return
 
+    # /stop <session> — kill a running PTY session (no approval needed; kill switch).
+    if text.strip().startswith("/stop"):
+        await _handle_stop_command(chat_id, text.strip(), send=send)
+        return
+
+    # /run <host> <command...> — launch a PTY session (approval-gated).
+    if text.strip().startswith("/run"):
+        await _handle_run_command(chat_id, text.strip(), send=send)
+        return
+
     # /pair [tool] [label] — create a pairing code and send the QR image.
     if text.strip().startswith("/pair"):
         parts = text.strip().split(maxsplit=3)
@@ -248,19 +378,16 @@ async def handle_callback_query(
 
     await answer(callback_query_id, text="Recorded ✔")
 
-    # Phase 5 dispatch: if this was a pty_inject approval and the operator
-    # chose "allow", dispatch the injection now.  The inject_text bound at
-    # approval-creation time is used — never the raw Telegram message.
-    # Fail-closed: any error in the dispatch path is caught and logged; the
-    # operator's "Recorded ✔" ack has already been sent so we never block it.
+    # Dispatch based on which action was approved.
     ref = prompt.surface_message_ref or {}
-    if ref.get("action") == "pty_inject" and key == "allow":
+    action = ref.get("action", "")
+
+    if action == "pty_inject" and key == "allow":
+        # Phase 5: PTY keystroke injection.  The inject_text bound at
+        # approval-creation time is used — never the raw Telegram message.
         thread_id = ref.get("thread_id")
         inject_text = ref.get("inject_text", "")
         if thread_id and inject_text:
-            # Fetch the thread row in a sync DB call, then dispatch via the
-            # async channel layer path — async_send_pty_input awaits group_send
-            # directly so it works inside this running event loop.
             @database_sync_to_async
             def _fetch_thread():
                 from apps.threads.models import Thread as _Thread  # noqa: PLC0415
@@ -283,6 +410,169 @@ async def handle_callback_query(
             log.error(
                 "pty_inject: approval resolved but payload incomplete: %r", ref
             )
+
+    elif action == "session_start" and key == "allow":
+        # Fleet F3 /run: launch the PTY session on the host using the bound
+        # command and cwd — never re-read from any Telegram message.
+        # Fail-closed: any error is logged; the operator's ack has already been sent.
+        host_id = ref.get("host_id", "")
+        command = ref.get("command", "")
+        cwd = ref.get("cwd", "") or ""
+        session_name = ref.get("session_name", "")
+        if host_id and command and session_name:
+            try:
+                @database_sync_to_async
+                def _fetch_host():
+                    from apps.hosts.models import Host as _Host  # noqa: PLC0415
+
+                    try:
+                        return _Host.objects.get(id=host_id)
+                    except _Host.DoesNotExist:
+                        log.error("session_start: host %s not found after approval", host_id)
+                        return None
+
+                host = await _fetch_host()
+                if host is not None:
+                    from apps.hostlink.service import send_host_command  # noqa: PLC0415
+
+                    await database_sync_to_async(send_host_command)(
+                        host,
+                        "session.start",
+                        session_name=session_name,
+                        command_str=command,
+                        cwd=cwd,
+                    )
+                    log.info(
+                        "session_start: dispatched session.start to host %s session %r",
+                        host_id,
+                        session_name,
+                    )
+                    # Audit the launch
+                    await database_sync_to_async(AuditEvent.objects.create)(
+                        thread=None,
+                        actor=str(from_user_id),
+                        event_type=AuditEvent.EventTypeChoices.RUNTIME_START,
+                        redacted_payload={
+                            "source": "telegram_run_allow",
+                            "host_id": host_id,
+                            "session_name": session_name,
+                        },
+                    )
+                    # Refresh fleet dashboard after launch.
+                    await refresh_fleet_dashboard()
+            except Exception:
+                log.exception("session_start: dispatch failed after approval")
+
+
+async def _handle_stop_command(chat_id: int, text: str, *, send) -> None:
+    """Handle /stop <session> — identity-gated, no approval (kill-switch).
+
+    Resolves to a running PTY Thread by tmux_session_name or thread UUID prefix.
+    Observed / non-PTY sessions → explicit "read-only" reply (never silent drop).
+    """
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await send(chat_id, "Usage: /stop <session-name-or-id>")
+        return
+
+    session_arg = parts[1].strip()
+    thread, error_msg = await _resolve_pty_thread_for_stop(session_arg)
+
+    if thread is None:
+        # Check if there is a non-PTY (observed) thread with this name to give
+        # a helpful "read-only" reply instead of a generic "not found".
+        observed = await database_sync_to_async(
+            lambda: Thread.objects.filter(
+                runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+                metadata__tmux_session_name=session_arg,
+            ).first()
+        )()
+        if observed is not None:
+            await send(
+                chat_id,
+                f"Session {session_arg!r} is observed (read-only) — nothing to stop.",
+            )
+        else:
+            await send(chat_id, error_msg or f"No running PTY session found for {session_arg!r}.")
+        return
+
+    # Emit session.kill to the host daemon.
+    host = thread.host
+    session_name = (thread.metadata or {}).get("tmux_session_name", session_arg)
+
+    if host is None:
+        await send(chat_id, f"Session {session_arg!r} has no linked host — cannot stop remotely.")
+        return
+
+    from apps.hostlink.service import send_host_command  # noqa: PLC0415
+
+    await database_sync_to_async(send_host_command)(
+        host,
+        "session.kill",
+        session_name=session_name,
+    )
+
+    # Mark Thread as STOPPED + audit.
+    stopped = await _stop_thread(thread.id, actor=str(chat_id))
+    if stopped:
+        await send(chat_id, f"Stopped session {session_name!r} on {host.slug}.")
+    else:
+        # Race: already stopped between our resolve and the update.
+        await send(chat_id, f"Session {session_name!r} was already stopped.")
+
+    # Refresh fleet dashboard.
+    await refresh_fleet_dashboard()
+
+
+async def _handle_run_command(chat_id: int, text: str, *, send) -> None:
+    """Handle /run <host> <command...> — approval-gated PTY launch.
+
+    Creates an APPROVAL Prompt binding {host_id, command, cwd} (no re-read of
+    the raw Telegram message after this point).  On Allow in handle_callback_query
+    → session.start is dispatched to the host daemon.
+    """
+    parts = text.split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].strip() or not parts[2].strip():
+        await send(chat_id, "Usage: /run <host> <command...>")
+        return
+
+    host_arg = parts[1].strip()
+    command = parts[2].strip()
+    cwd = ""  # Default cwd (tmux server default); could be extended later.
+
+    # Resolve host — default-deny on unknown.
+    host = await _resolve_host(host_arg)
+    if host is None:
+        slugs = await _list_host_slugs()
+        slugs_str = ", ".join(slugs) if slugs else "(none registered)"
+        await send(
+            chat_id,
+            f"Unknown host {host_arg!r}. Known hosts: {slugs_str}",
+        )
+        return
+
+    # Generate a session name for this launch so it can be bound in the Prompt.
+    session_name = f"orc-{uuid.uuid4().hex[:8]}"
+
+    # We need a Thread to bind the Prompt to.  Use/create the operator's chat thread.
+    thread = await database_sync_to_async(get_or_create_thread_for_chat)(chat_id)
+
+    # Create an APPROVAL Prompt binding the exact launch parameters.
+    prompt = await _create_session_start_prompt(thread, host, command, cwd, session_name)
+
+    # Audit the request.
+    await _audit_session_start_request(
+        actor=str(chat_id),
+        host_id=str(host.id),
+        command=command,
+    )
+
+    # Send the approval request to the operator.
+    reply_markup = build_reply_markup(prompt)
+    msg = prompt.question
+    if prompt.body:
+        msg = f"{msg}\n\n{prompt.body}"
+    await send(chat_id, msg)
 
 
 async def _handle_pair_command(chat_id: int, tool: str, label: str) -> None:
