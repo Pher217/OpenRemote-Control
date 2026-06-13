@@ -91,8 +91,15 @@ def _make_observed_thread(account, topic_id, forum_chat_id):
 async def _make_send():
     calls = []
 
-    async def send(chat_id, text, message_thread_id=None):
-        calls.append({"chat_id": chat_id, "text": text, "thread_id": message_thread_id})
+    async def send(chat_id, text, message_thread_id=None, reply_markup=None):
+        calls.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "thread_id": message_thread_id,
+                "reply_markup": reply_markup,
+            }
+        )
 
     return send, calls
 
@@ -503,3 +510,38 @@ async def test_approval_prompt_stores_exact_reply_text(settings):
     # The Prompt's question/body show the text to the operator
     assert "inject" in prompt.question.lower()
     assert repr(reply_text) in prompt.body or reply_text in prompt.body
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(CHANNEL_LAYERS=INMEM_CHANNEL_LAYERS)
+async def test_inject_approval_delivers_tappable_keyboard(settings):
+    """
+    GIVEN a driveable PTY session and an allowlisted forum reply
+    WHEN  handle_forum_reply creates the APPROVAL Prompt and sends it
+    THEN  the approval message carries an inline keyboard with tappable
+          Allow and Deny buttons whose callback_data binds the Prompt nonce.
+    Regression guard: the reply_markup kwarg must reach send().
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
+    settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
+    settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
+
+    from apps.telegram.service import handle_forum_reply
+
+    account = await database_sync_to_async(_make_account)("kbd1")
+    host = await database_sync_to_async(_make_host)("kbd-host-1")
+    await database_sync_to_async(_make_pty_thread)(
+        account, host, "kbd-session", topic_id=120, forum_chat_id=-100111
+    )
+
+    send, calls = await _make_send()
+    await handle_forum_reply(-100111, 120, 111, "ls\n", send=send)
+
+    assert len(calls) == 1
+    markup = calls[0]["reply_markup"]
+    assert markup is not None, "approval message must carry an inline keyboard"
+    buttons = [b for row in markup["inline_keyboard"] for b in row]
+    cbs = [b["callback_data"] for b in buttons]
+    assert any(cb.endswith(":allow") for cb in cbs), f"no Allow button: {cbs}"
+    assert any(cb.endswith(":deny") for cb in cbs), f"no Deny button: {cbs}"

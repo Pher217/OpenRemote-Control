@@ -277,14 +277,10 @@ async def handle_forum_reply(
 
     prompt = await _create_inject_approval()
 
-    # Deliver the approval request inline via the injected send callable
-    # (same transport already used for read-only replies in this handler).
-    # The reply_markup is not available via the plain send() signature used in
-    # tests; delivery of the inline keyboard is best-effort via Telegram API
-    # when running for real, but the Prompt already exists in DB — a timeout
-    # or delivery failure here does NOT prevent the Prompt from being resolved
-    # if the operator finds it another way.  Fail-closed: if delivery fails,
-    # nothing is injected (the Prompt stays PENDING until it expires).
+    # Deliver the approval request inline via the injected send callable. The
+    # production send is telegram_api.send_message, which accepts reply_markup,
+    # so the Allow/Deny inline keyboard is delivered here. Fail-closed: if
+    # delivery fails, nothing is injected (the Prompt stays PENDING until expiry).
     reply_markup = build_reply_markup(prompt)
     msg = prompt.question
     if prompt.body:
@@ -293,6 +289,7 @@ async def handle_forum_reply(
         forum_chat_id,
         msg,
         message_thread_id=message_thread_id,
+        reply_markup=reply_markup,
     )
 
 
@@ -567,12 +564,12 @@ async def _handle_run_command(chat_id: int, text: str, *, send) -> None:
         command=command,
     )
 
-    # Send the approval request to the operator.
+    # Send the approval request to the operator (with the Allow/Deny keyboard).
     reply_markup = build_reply_markup(prompt)
     msg = prompt.question
     if prompt.body:
         msg = f"{msg}\n\n{prompt.body}"
-    await send(chat_id, msg)
+    await send(chat_id, msg, reply_markup=reply_markup)
 
 
 async def _handle_pair_command(chat_id: int, tool: str, label: str) -> None:

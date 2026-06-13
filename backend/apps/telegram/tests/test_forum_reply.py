@@ -60,8 +60,15 @@ async def _make_send():
     """Return (send callable, calls list)."""
     calls = []
 
-    async def send(chat_id, text, message_thread_id=None):
-        calls.append({"chat_id": chat_id, "text": text, "message_thread_id": message_thread_id})
+    async def send(chat_id, text, message_thread_id=None, reply_markup=None):
+        calls.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "message_thread_id": message_thread_id,
+                "reply_markup": reply_markup,
+            }
+        )
 
     return send, calls
 

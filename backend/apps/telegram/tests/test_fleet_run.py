@@ -56,7 +56,7 @@ class _CaptureSend:
         self.calls: list[dict] = []
 
     async def __call__(self, chat_id, text, **kwargs):
-        self.calls.append({"chat_id": chat_id, "text": text})
+        self.calls.append({"chat_id": chat_id, "text": text, **kwargs})
 
 
 async def _fake_answer(cq_id, text="", show_alert=False):
@@ -582,3 +582,38 @@ async def test_run_allow_session_start_frame_shape(settings):
     # No secrets beyond what's needed
     assert "token" not in frame
     assert "password" not in frame
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(
+    TELEGRAM_ALLOWED_CHAT_IDS={12345},
+    TELEGRAM_FORUM_CHAT_ID="",
+    CHANNEL_LAYERS=INMEM_CHANNEL_LAYERS,
+)
+async def test_run_approval_delivers_tappable_keyboard(settings):
+    """
+    GIVEN an allowlisted operator sends /run <host> <command>
+    WHEN  handle_update creates the APPROVAL Prompt and sends it
+    THEN  the approval message carries an inline keyboard with tappable
+          Allow and Deny buttons whose callback_data binds the Prompt nonce.
+    Regression guard: the reply_markup kwarg must reach send().
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
+    settings.TELEGRAM_FORUM_CHAT_ID = ""
+    settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
+
+    from apps.telegram.service import handle_update
+
+    await database_sync_to_async(_make_host)("run-host-kbd")
+
+    send = _CaptureSend()
+    await handle_update(12345, "/run run-host-kbd claude --model sonnet", send=send)
+
+    assert len(send.calls) == 1
+    markup = send.calls[0].get("reply_markup")
+    assert markup is not None, "approval message must carry an inline keyboard"
+    buttons = [b for row in markup["inline_keyboard"] for b in row]
+    cbs = [b["callback_data"] for b in buttons]
+    assert any(cb.endswith(":allow") for cb in cbs), f"no Allow button: {cbs}"
+    assert any(cb.endswith(":deny") for cb in cbs), f"no Deny button: {cbs}"
