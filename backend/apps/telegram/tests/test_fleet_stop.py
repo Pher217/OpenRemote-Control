@@ -131,7 +131,7 @@ async def test_stop_allowlisted_kills_marks_stopped_and_audits(settings):
         "apps.telegram.service.refresh_fleet_dashboard",
         new_callable=__import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock,
     ):
-        await handle_update(12345, "/stop orc-abc123", send=send)
+        await handle_update(12345, "/stop orc-abc123", from_user_id=12345, send=send)
 
     # Confirmation message was sent
     assert len(send.calls) == 1
@@ -208,7 +208,7 @@ async def test_stop_non_allowlisted_is_silent_noop(settings):
     await cl.group_add(group, ch)
 
     send = _CaptureSend()
-    await handle_update(99999, "/stop orc-s2session", send=send)
+    await handle_update(99999, "/stop orc-s2session", from_user_id=99999, send=send)
 
     # Nothing sent
     assert send.calls == []
@@ -260,7 +260,7 @@ async def test_stop_unknown_session_default_deny_reply(settings):
 
     # No matching thread in DB
     send = _CaptureSend()
-    await handle_update(12345, "/stop nonexistent-session-xyz", send=send)
+    await handle_update(12345, "/stop nonexistent-session-xyz", from_user_id=12345, send=send)
 
     assert len(send.calls) == 1, "Should reply with denial/not-found"
     assert send.calls[0]["chat_id"] == 12345
@@ -298,7 +298,7 @@ async def test_stop_observed_session_read_only_reply(settings):
     await database_sync_to_async(_make_observed_thread)(account, "obs-session-s4")
 
     send = _CaptureSend()
-    await handle_update(12345, "/stop obs-session-s4", send=send)
+    await handle_update(12345, "/stop obs-session-s4", from_user_id=12345, send=send)
 
     assert len(send.calls) == 1
     reply = send.calls[0]["text"].lower()
@@ -328,7 +328,7 @@ async def test_stop_no_args_shows_usage(settings):
     from apps.telegram.service import handle_update
 
     send = _CaptureSend()
-    await handle_update(12345, "/stop", send=send)
+    await handle_update(12345, "/stop", from_user_id=12345, send=send)
 
     assert len(send.calls) == 1
     assert "Usage" in send.calls[0]["text"] or "usage" in send.calls[0]["text"].lower()
@@ -375,7 +375,7 @@ async def test_stop_host_frame_shape(settings):
         "apps.telegram.service.refresh_fleet_dashboard",
         new_callable=__import__("unittest.mock", fromlist=["AsyncMock"]).AsyncMock,
     ):
-        await handle_update(12345, "/stop orc-s6session", send=send)
+        await handle_update(12345, "/stop orc-s6session", from_user_id=12345, send=send)
 
     async def _try_receive():
         try:

@@ -94,7 +94,7 @@ async def test_run_creates_approval_prompt_binding_exact_command(settings):
     host = await database_sync_to_async(_make_host)("run-host-r1")
 
     send = _CaptureSend()
-    await handle_update(12345, "/run run-host-r1 claude --model sonnet", send=send)
+    await handle_update(12345, "/run run-host-r1 claude --model sonnet", from_user_id=12345, send=send)
 
     # Approval message sent to operator
     assert len(send.calls) == 1
@@ -346,7 +346,7 @@ async def test_run_unknown_host_default_deny_no_prompt(settings):
     send = _CaptureSend()
     before_count = await database_sync_to_async(Prompt.objects.count)()
 
-    await handle_update(12345, "/run totally-unknown-host-xyz claude", send=send)
+    await handle_update(12345, "/run totally-unknown-host-xyz claude", from_user_id=12345, send=send)
 
     after_count = await database_sync_to_async(Prompt.objects.count)()
 
@@ -391,7 +391,7 @@ async def test_run_non_allowlisted_is_silent_noop(settings):
     send = _CaptureSend()
     before_count = await database_sync_to_async(Prompt.objects.count)()
 
-    await handle_update(99999, "/run run-host-r5 claude", send=send)
+    await handle_update(99999, "/run run-host-r5 claude", from_user_id=99999, send=send)
 
     after_count = await database_sync_to_async(Prompt.objects.count)()
 
@@ -434,7 +434,7 @@ async def test_run_audit_events_created(settings):
         AuditEvent.objects.filter(event_type=AuditEvent.EventTypeChoices.APPROVAL_REQUEST).count
     )()
 
-    await handle_update(12345, "/run run-host-r6 claude", send=send)
+    await handle_update(12345, "/run run-host-r6 claude", from_user_id=12345, send=send)
 
     after_req = await database_sync_to_async(
         AuditEvent.objects.filter(event_type=AuditEvent.EventTypeChoices.APPROVAL_REQUEST).count
@@ -608,7 +608,7 @@ async def test_run_approval_delivers_tappable_keyboard(settings):
     await database_sync_to_async(_make_host)("run-host-kbd")
 
     send = _CaptureSend()
-    await handle_update(12345, "/run run-host-kbd claude --model sonnet", send=send)
+    await handle_update(12345, "/run run-host-kbd claude --model sonnet", from_user_id=12345, send=send)
 
     assert len(send.calls) == 1
     markup = send.calls[0].get("reply_markup")
@@ -617,3 +617,92 @@ async def test_run_approval_delivers_tappable_keyboard(settings):
     cbs = [b["callback_data"] for b in buttons]
     assert any(cb.endswith(":allow") for cb in cbs), f"no Allow button: {cbs}"
     assert any(cb.endswith(":deny") for cb in cbs), f"no Deny button: {cbs}"
+
+
+# ---------------------------------------------------------------------------
+# Inv#9 — Non-allowlisted USER in an allowlisted CHAT is denied for /run
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(
+    TELEGRAM_ALLOWED_CHAT_IDS={12345},
+    TELEGRAM_FORUM_CHAT_ID="",
+)
+async def test_run_non_allowlisted_user_in_allowlisted_chat_is_denied(settings):
+    """
+    GIVEN chat_id=12345 IS in TELEGRAM_ALLOWED_CHAT_IDS
+          but from_user_id=99999 is NOT in TELEGRAM_ALLOWED_CHAT_IDS
+    WHEN handle_update(12345, "/run <host> <command>", from_user_id=99999, ...) is called
+    THEN no APPROVAL Prompt is created and send is never called (silent deny).
+    Invariant #9: gate on from.id, not just chat_id.
+    Regression: before the fix, an allowlisted chat_id bypassed the from_user_id check.
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
+    settings.TELEGRAM_FORUM_CHAT_ID = ""
+
+    from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_update
+
+    await database_sync_to_async(_make_host)("run-host-inv9")
+
+    send = _CaptureSend()
+    before_count = await database_sync_to_async(Prompt.objects.count)()
+
+    await handle_update(12345, "/run run-host-inv9 claude", from_user_id=99999, send=send)
+
+    after_count = await database_sync_to_async(Prompt.objects.count)()
+
+    assert send.calls == [], "Non-allowlisted user must not receive a reply (silent deny)"
+    assert after_count == before_count, "APPROVAL Prompt must not be created for non-allowlisted user"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(
+    TELEGRAM_ALLOWED_CHAT_IDS={12345},
+    TELEGRAM_FORUM_CHAT_ID="",
+)
+async def test_stop_non_allowlisted_user_in_allowlisted_chat_is_denied(settings):
+    """
+    GIVEN chat_id=12345 IS in TELEGRAM_ALLOWED_CHAT_IDS
+          but from_user_id=99999 is NOT in TELEGRAM_ALLOWED_CHAT_IDS
+    WHEN handle_update(12345, "/stop <session>", from_user_id=99999, ...) is called
+    THEN send is never called (silent deny) and no kill frame is dispatched.
+    Invariant #9 applied to /stop.
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
+    settings.TELEGRAM_FORUM_CHAT_ID = ""
+
+    from apps.telegram.service import handle_update
+
+    send = _CaptureSend()
+    await handle_update(12345, "/stop some-session", from_user_id=99999, send=send)
+
+    assert send.calls == [], "Non-allowlisted user must not receive a /stop reply (silent deny)"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(
+    TELEGRAM_ALLOWED_CHAT_IDS={12345},
+    TELEGRAM_FORUM_CHAT_ID="",
+)
+async def test_sessions_non_allowlisted_user_in_allowlisted_chat_is_denied(settings):
+    """
+    GIVEN chat_id=12345 IS in TELEGRAM_ALLOWED_CHAT_IDS
+          but from_user_id=99999 is NOT in TELEGRAM_ALLOWED_CHAT_IDS
+    WHEN handle_update(12345, "/sessions", from_user_id=99999, ...) is called
+    THEN send is never called (silent deny).
+    Invariant #9 applied to /sessions.
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
+    settings.TELEGRAM_FORUM_CHAT_ID = ""
+
+    from apps.telegram.service import handle_update
+
+    send = _CaptureSend()
+    await handle_update(12345, "/sessions", from_user_id=99999, send=send)
+
+    assert send.calls == [], "Non-allowlisted user must not receive /sessions output (silent deny)"

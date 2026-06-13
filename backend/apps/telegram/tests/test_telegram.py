@@ -73,7 +73,7 @@ async def test_handle_update_dispatches_and_replies(monkeypatch, settings):
     async def cap(cid, txt):
         sent.append((cid, txt))
 
-    await handle_update(12345, "Say hi", send=cap)
+    await handle_update(12345, "Say hi", from_user_id=12345, send=cap)
 
     @database_sync_to_async
     def _state():
@@ -102,7 +102,7 @@ async def test_non_allowlisted_ignored(monkeypatch, settings):
     async def cap(cid, txt):
         sent.append((cid, txt))
 
-    await handle_update(999, "hi", send=cap)
+    await handle_update(999, "hi", from_user_id=999, send=cap)
 
     @database_sync_to_async
     def _exists():
@@ -127,7 +127,7 @@ async def test_slash_stop_no_args_shows_usage(monkeypatch, settings):
     async def cap(cid, txt, **kwargs):
         sent.append((cid, txt))
 
-    await handle_update(12345, "/stop", send=cap)
+    await handle_update(12345, "/stop", from_user_id=12345, send=cap)
 
     assert len(sent) == 1
     assert sent[0][0] == 12345

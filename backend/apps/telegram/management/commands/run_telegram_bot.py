@@ -91,7 +91,7 @@ class Command(BaseCommand):
                                 send=send_message,
                             )
                         else:
-                            await handle_update(chat_id, text, send=send_message)
+                            await handle_update(chat_id, text, from_user_id=from_user_id, send=send_message)
                 except Exception as exc:
                     logger.error(
                         "telegram update handling failed: %s", redact_token(repr(exc))

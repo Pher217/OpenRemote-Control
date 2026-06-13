@@ -62,7 +62,7 @@ async def test_sessions_command_allowlisted_sends_fleet_and_refreshes_dashboard(
             "apps.slash.handlers.sessions._active_threads",
             return_value=[],
         ):
-            await handle_update(12345, "/sessions", send=send)
+            await handle_update(12345, "/sessions", from_user_id=12345, send=send)
 
     # Fleet text was sent once.
     assert len(send.calls) == 1
@@ -99,7 +99,7 @@ async def test_sessions_command_non_allowlisted_is_silently_dropped():
         "apps.telegram.service.refresh_fleet_dashboard",
         new_callable=AsyncMock,
     ) as mock_refresh:
-        await handle_update(999, "/sessions", send=send)
+        await handle_update(999, "/sessions", from_user_id=999, send=send)
 
     # Nothing sent.
     assert send.calls == []

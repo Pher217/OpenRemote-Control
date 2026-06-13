@@ -75,7 +75,7 @@ async def test_bot_seeds_offset_from_cache(monkeypatch):
             return [_make_text_update(201)]
         raise _StopLoop("done")
 
-    async def fake_handle_update(chat_id, text, *, send):
+    async def fake_handle_update(chat_id, text, *, from_user_id, send):
         pass
 
     monkeypatch.setattr(cmd_module, "get_updates", fake_get_updates)
@@ -123,7 +123,7 @@ async def test_bot_advances_cache_after_handling(monkeypatch):
             return [_make_text_update(100)]
         raise _StopLoop("done")
 
-    async def fake_handle_update(chat_id, text, *, send):
+    async def fake_handle_update(chat_id, text, *, from_user_id, send):
         pass
 
     monkeypatch.setattr(cmd_module, "get_updates", fake_get_updates)
@@ -172,7 +172,7 @@ async def test_bot_skips_update_id_lte_last_stored(monkeypatch):
             return [_make_text_update(50)]
         raise _StopLoop("done")
 
-    async def fake_handle_update(chat_id, text, *, send):
+    async def fake_handle_update(chat_id, text, *, from_user_id, send):
         handled.append(chat_id)
 
     monkeypatch.setattr(cmd_module, "get_updates", fake_get_updates)
