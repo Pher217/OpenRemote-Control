@@ -10,7 +10,7 @@ from apps.observe.observer import (
     read_new_lines,
     select_session_files,
 )
-from apps.observe.runtimes import iter_runtime_files
+from apps.observe.runtimes import get_runtime_adapter, iter_runtime_files
 
 
 def _resolve_runtimes() -> list[str]:
@@ -64,6 +64,8 @@ class Command(BaseCommand):
         seen: dict[str, set] = {rt: set() for rt in runtimes}
         # Per-file remembered session id (for runtimes whose turn lines lack one).
         file_states: dict[tuple[str, Path], dict] = {}
+        # Per-DB poll state for sqlite-based adapters (tracks last_msg_id, etc.).
+        sqlite_states: dict[tuple[str, Path], dict] = {}
         last_selected: dict[str, int | None] = dict.fromkeys(runtimes)
 
         async def on_turn(thread, p, msg):
@@ -80,6 +82,7 @@ class Command(BaseCommand):
         while True:
             try:
                 for provider in runtimes:
+                    adapter = get_runtime_adapter(provider)
                     file_infos = iter_runtime_files(provider)
                     selected = select_session_files(
                         file_infos,
@@ -98,12 +101,17 @@ class Command(BaseCommand):
 
                     for path in (Path(s) for s in selected):
                         key = (provider, path)
-                        if key not in offsets:
-                            # Seed at current end so only new turns stream.
-                            offsets[key] = path.stat().st_size
-                            continue
-                        lines, new_offset = read_new_lines(path, offsets[key])
-                        offsets[key] = new_offset
+                        if getattr(adapter, "source_kind", "file") == "sqlite":
+                            state = sqlite_states.get(key, {})
+                            lines, new_state = adapter.read_turns(str(path), state)
+                            sqlite_states[key] = new_state
+                        else:
+                            if key not in offsets:
+                                # Seed at current end so only new turns stream.
+                                offsets[key] = path.stat().st_size
+                                continue
+                            lines, new_offset = read_new_lines(path, offsets[key])
+                            offsets[key] = new_offset
                         if lines:
                             seen[provider] = await process_lines(
                                 lines,

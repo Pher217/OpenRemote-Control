@@ -19,6 +19,8 @@ class RuntimeAdapter(Protocol):
     default_root: str
     # Glob pattern relative to root (e.g. "**/*.jsonl" or "**/chats/*.jsonl").
     discovery_glob: str
+    # Source kind: "file" for JSONL glob discovery (default), "sqlite" for DB-based.
+    source_kind: str
 
     def parse_turn(self, raw: str) -> dict | None:
         ...
@@ -63,11 +65,14 @@ def get_runtime_adapter(provider: str) -> RuntimeAdapter:
 
 
 def iter_runtime_files(provider: str) -> list[tuple[str, float]]:
-    """Return (path, mtime) pairs for all JSONL files belonging to a runtime.
+    """Return (path, mtime) pairs for all sources belonging to a runtime.
 
     The scan root is resolved in order:
     1. os.environ[adapter.default_root_env]  (per-runtime override)
     2. adapter.default_root                   (sensible default)
+
+    For file-based adapters, sources are JSONL files discovered via discovery_glob.
+    For sqlite adapters, sources are discovered via the adapter's discover method.
 
     Returns an empty list when the root directory does not exist.
     """
@@ -76,5 +81,7 @@ def iter_runtime_files(provider: str) -> list[tuple[str, float]]:
     root = Path(configured) if configured else Path(adapter.default_root)
     if not root.exists():
         return []
+    if getattr(adapter, "source_kind", "file") == "sqlite":
+        return adapter.discover(root)
     paths = list(root.glob(adapter.discovery_glob))
     return [(str(p), os.path.getmtime(p)) for p in paths]

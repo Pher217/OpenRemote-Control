@@ -19,6 +19,7 @@ from apps.observe.runtimes import register_runtime_adapter
 @register_runtime_adapter
 class GeminiAdapter:
     provider = "gemini"
+    source_kind = "file"
     default_root_env = "OBSERVE_GEMINI_TMP_DIR"
     default_root = os.path.expanduser("~/.gemini/tmp")
     discovery_glob = "**/chats/*.jsonl"

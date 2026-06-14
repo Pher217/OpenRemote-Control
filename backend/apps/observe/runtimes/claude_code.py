@@ -7,6 +7,7 @@ from apps.observe.runtimes import register_runtime_adapter
 @register_runtime_adapter
 class ClaudeCodeAdapter:
     provider = "claude_code"
+    source_kind = "file"
     default_root_env = "OBSERVE_CLAUDE_PROJECTS_DIR"
     default_root = os.path.expanduser("~/.claude/projects")
     discovery_glob = "**/*.jsonl"
