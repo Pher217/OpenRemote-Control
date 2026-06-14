@@ -5,7 +5,7 @@ from apps.slash.parser import parse
 from apps.threads.models import Message, Thread
 
 
-async def dispatch_text(thread, text, *, on_event):
+async def dispatch_text(thread, text, *, on_event, extra_system_context: str | None = None):
     if not (text or "").strip():
         await on_event({"type": "error", "message": "empty message"})
         return
@@ -34,6 +34,11 @@ async def dispatch_text(thread, text, *, on_event):
 
     await _persist_message(thread, "user", text)
     history = await _build_history(thread)
+
+    # Prepend ephemeral fleet context as a system message when provided.
+    # This message is NOT persisted to the DB — it lives only for this call.
+    if extra_system_context:
+        history = [{"role": "system", "content": extra_system_context}] + history
 
     from apps.tier2.base import UnknownProviderError, get_adapter
 
