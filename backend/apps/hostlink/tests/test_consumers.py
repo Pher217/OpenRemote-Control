@@ -282,3 +282,34 @@ class TestHostDaemonConsumer:
         assert "from a raw line" in msgs
 
         await communicator.disconnect()
+
+    async def test_host_heartbeat_echoes_ping_via_group(self, host, host_token):
+        """
+        GIVEN a connected daemon
+        WHEN a host_heartbeat message is sent with a nonce
+        THEN the consumer echoes a host_command ping back through the group path,
+             which arrives as a websocket.send frame on the same connection.
+        """
+        import asyncio
+        import json as _json
+
+        qs = _qs(host, host_token)
+        communicator = WebsocketCommunicator(
+            _test_application, f"ws/hosts/{host.id}/?{qs}"
+        )
+        connected, _ = await communicator.connect()
+        assert connected is True
+
+        await communicator.send_json_to(
+            {"type": "host_heartbeat", "nonce": "abc-123"}
+        )
+        # Allow the in-memory channel layer to dispatch group_send → host_command.
+        await asyncio.sleep(0.1)
+
+        response_text = await communicator.receive_from(timeout=1)
+        response = _json.loads(response_text)
+        assert response["type"] == "host_command"
+        assert response["command"] == "ping"
+        assert response["nonce"] == "abc-123"
+
+        await communicator.disconnect()
