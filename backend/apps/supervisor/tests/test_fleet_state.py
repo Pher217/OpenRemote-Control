@@ -286,3 +286,45 @@ def test_build_fleet_state_needs_input_for_waiting_approval():
     )
     assert session is not None
     assert session["needs_input"] is True
+
+
+@pytest.mark.django_db
+def test_build_fleet_state_excludes_telegram_chat_surfaces():
+    """
+    GIVEN a Telegram chat thread (the operator's own conversation with the bot,
+          which has a TelegramChat row) alongside a real coding session
+    WHEN build_fleet_state is called
+    THEN the chat thread is excluded and only the coding session appears
+         (the chat must not list itself as a 'session').
+    """
+    from apps.accounts.models import Account
+    from apps.telegram.models import TelegramChat
+
+    account = Account.objects.create(
+        provider="ollama",
+        label="sup-test-chat-exclude",
+        auth_type="none",
+        credential_type="none",
+    )
+    chat_thread = Thread.objects.create(
+        name="telegram:876129439",
+        runtime="ollama",
+        runtime_mode=Thread.RuntimeModeChoices.API,
+        status=Thread.StatusChoices.RUNNING,
+        account=account,
+    )
+    TelegramChat.objects.create(chat_id=876129439, thread=chat_thread)
+
+    coding = Thread.objects.create(
+        name="real coding session",
+        runtime="claude_code",
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        status=Thread.StatusChoices.RUNNING,
+        account=account,
+    )
+
+    result = build_fleet_state()
+    ids = {s["thread_id"] for s in result}
+
+    assert str(chat_thread.id) not in ids
+    assert str(coding.id) in ids
