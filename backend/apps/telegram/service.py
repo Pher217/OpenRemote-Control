@@ -16,7 +16,7 @@ from apps.prompts.service import create_prompt, resolve as resolve_prompt
 from apps.prompts.surfaces.telegram import build_reply_markup, parse_callback
 from apps.slash.fleet_dashboard import refresh_fleet_dashboard
 from apps.slash.handlers.sessions import _active_threads, render_fleet
-from apps.supervisor.digest import render_digest
+from apps.supervisor.activity import render_fleet_with_activity
 from apps.supervisor.fleet_state import build_fleet_state
 from apps.telegram.models import TelegramChat
 from apps.threads.dispatch import dispatch_text
@@ -359,10 +359,15 @@ async def handle_update(chat_id: int, text: str, *, from_user_id: int | None, se
     # for an authenticated, allowlisted operator. Non-operators get plain chat.
     fleet_context = None
     if from_user_id in settings.TELEGRAM_ALLOWED_CHAT_IDS:
-        fleet = await database_sync_to_async(build_fleet_state)()
-        fleet_context = (
-            "Currently active coding sessions on this machine:\n" + render_digest(fleet)
-        )
+
+        def _build_fleet_context():
+            fleet = build_fleet_state()
+            return (
+                "Currently active coding sessions on this machine:\n"
+                + render_fleet_with_activity(fleet_state=fleet)
+            )
+
+        fleet_context = await database_sync_to_async(_build_fleet_context)()
     await dispatch_text(thread, text, on_event=on_event, extra_system_context=fleet_context)
 
     if reply:
