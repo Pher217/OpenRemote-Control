@@ -148,3 +148,4 @@ OpenRemote Control is an independent, third-party project, not affiliated with A
 ## Author
 
 Philippe Hermann · [Pher217](https://github.com/Pher217)
+Patrick Hermann· [Patrickh217](https://github.com/Patrickh217)
