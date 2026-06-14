@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
@@ -700,3 +701,91 @@ async def test_different_turns_delivered_twice_sends_twice():
         await deliver_turn(thread, turn2, None, forum_chat_id=-100999, api=fake)
 
     assert len(fake.send_calls) == 2
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_stale_topic_is_recreated_and_redelivered():
+    """
+    GIVEN an observed thread whose telegram_topic_id points at a deleted forum topic
+    WHEN a turn is delivered and the send to that stale topic raises Telegram's
+         400 'message thread not found'
+    THEN the stale topic state is cleared, a fresh topic is created, and the turn
+         is redelivered to the new topic.
+    """
+
+    class _StaleTopicApi(_FakeApi):
+        def __init__(self, stale_topic_id):
+            super().__init__()
+            self._stale_topic_id = stale_topic_id
+
+        async def send_message(
+            self,
+            chat_id,
+            text,
+            message_thread_id=None,
+            parse_mode=None,
+            disable_notification=None,
+        ):
+            if message_thread_id == self._stale_topic_id:
+                req = httpx.Request(
+                    "POST", "https://api.telegram.org/botX/sendMessage"
+                )
+                resp = httpx.Response(
+                    400,
+                    json={
+                        "ok": False,
+                        "error_code": 400,
+                        "description": "Bad Request: message thread not found",
+                    },
+                    request=req,
+                )
+                raise httpx.HTTPStatusError("msg", request=req, response=resp)
+            return await super().send_message(
+                chat_id,
+                text,
+                message_thread_id=message_thread_id,
+                parse_mode=parse_mode,
+                disable_notification=disable_notification,
+            )
+
+    fake = _StaleTopicApi(stale_topic_id=999)
+    thread = await database_sync_to_async(get_or_create_observed_thread)(
+        "Sstale01", "/tmp/stale.jsonl"
+    )
+
+    @database_sync_to_async
+    def _pre_set_stale_topic():
+        thread.metadata["telegram_topic_id"] = 999
+        thread.save(update_fields=["metadata"])
+
+    await _pre_set_stale_topic()
+    await _cache_clear()
+
+    turn = {
+        "role": "assistant",
+        "text": "hello",
+        "uuid": "stale-uuid-1",
+        "session_id": "Sstale01",
+    }
+
+    with override_settings(OBSERVE_DELIVERY_MODE="all"):
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+
+    # A fresh topic was created exactly once (id 1000 from _FakeApi).
+    assert len(fake.create_calls) == 1
+
+    # At least one send succeeded to the NEW topic id, not the stale 999.
+    new_topic_id = 1000
+    successful = [c for c in fake.send_calls if c[2] == new_topic_id]
+    assert successful
+    assert all(c[2] != 999 for c in fake.send_calls)
+
+    # In-memory thread metadata now points at the new topic; stale 999 is cleared.
+    assert thread.metadata["telegram_topic_id"] == new_topic_id
+
+    @database_sync_to_async
+    def _stored_topic():
+        return Thread.objects.get(id=thread.id).metadata.get("telegram_topic_id")
+
+    assert await _stored_topic() == new_topic_id
