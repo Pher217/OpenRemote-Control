@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.connectors",
     "apps.gateway",
     "apps.hostlink",
+    "apps.supervisor",
 ]
 
 MIDDLEWARE = [
