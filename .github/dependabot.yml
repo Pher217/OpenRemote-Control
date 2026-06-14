@@ -9,6 +9,11 @@ updates:
     labels:
       - "dependencies"
       - "backend"
+    ignore:
+      # pytest is deliberately pinned <9 for a reproducible test env (#32).
+      # Revisit when pytest 9 ships and the suite is verified against it.
+      - dependency-name: "pytest"
+        update-types: ["version-update:semver-major"]
 
   # Host daemon Python deps
   - package-ecosystem: "pip"
@@ -19,6 +24,10 @@ updates:
     labels:
       - "dependencies"
       - "host-agent"
+    ignore:
+      # pytest is deliberately pinned <9 for a reproducible test env (#32).
+      - dependency-name: "pytest"
+        update-types: ["version-update:semver-major"]
 
   # orc-mcp connector Python deps
   - package-ecosystem: "pip"
