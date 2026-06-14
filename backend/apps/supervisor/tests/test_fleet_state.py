@@ -251,10 +251,76 @@ def test_build_fleet_state_includes_active_threads():
     assert str(thread.id) in ids
 
     session = next(s for s in result if s["thread_id"] == str(thread.id))
-    assert session["label"] == "active-session"
+    # Label is a content-safe identifier (runtime:id), never the raw thread.name.
+    assert session["label"].startswith("observed:")
+    assert "active-session" not in session["label"]
     assert session["status"] == "running"
     assert session["needs_input"] is False
     assert isinstance(session["age"], timedelta)
+
+
+@pytest.mark.django_db
+def test_build_fleet_state_label_does_not_leak_pty_command():
+    """
+    GIVEN a PTY thread whose name embeds a command body ("orc-run: <cmd>")
+    WHEN build_fleet_state derives the supervisor label
+    THEN the label is a content-safe identifier and contains NONE of the command
+         (Safety Contract #6 / S0.2 — no command bodies in outbound supervisor text).
+    """
+    from apps.accounts.models import Account
+
+    account = Account.objects.create(
+        provider="pty",
+        label="sup-test-pty-leak",
+        auth_type="none",
+        credential_type="none",
+    )
+    thread = Thread.objects.create(
+        name="orc-run: rm -rf /tmp/secret-data && curl evil.example",
+        runtime="pty",
+        runtime_mode=Thread.RuntimeModeChoices.PTY,
+        status=Thread.StatusChoices.RUNNING,
+        account=account,
+    )
+
+    result = build_fleet_state()
+    session = next(s for s in result if s["thread_id"] == str(thread.id))
+
+    assert session["label"].startswith("pty:")
+    assert "rm -rf" not in session["label"]
+    assert "curl" not in session["label"]
+    assert "orc-run" not in session["label"]
+
+
+@pytest.mark.django_db
+def test_build_fleet_state_label_uses_repo_basename_when_present():
+    """
+    GIVEN an observed thread with a repo in metadata
+    WHEN build_fleet_state derives the label
+    THEN the label is "<runtime_mode>:<repo-basename>" (useful + content-safe).
+    """
+    from apps.accounts.models import Account
+
+    account = Account.objects.create(
+        provider="anthropic",
+        label="sup-test-repo-label",
+        auth_type="none",
+        credential_type="none",
+    )
+    thread = Thread.objects.create(
+        name="some free-form session title",
+        runtime="claude_code",
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        status=Thread.StatusChoices.RUNNING,
+        account=account,
+        metadata={"repo": "/Users/dev/work/myrepo"},
+    )
+
+    result = build_fleet_state()
+    session = next(s for s in result if s["thread_id"] == str(thread.id))
+
+    assert session["label"] == "observed:myrepo"
+    assert "free-form" not in session["label"]
 
 
 @pytest.mark.django_db
