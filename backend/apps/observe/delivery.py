@@ -1,3 +1,6 @@
+import logging
+
+import httpx
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from django.conf import settings
@@ -8,12 +11,39 @@ from apps.observe.formatting import _esc, format_turn
 from apps.telegram import telegram_api
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 
+log = logging.getLogger(__name__)
+
 TELEGRAM_MAX = 4096
 # Maximum characters shown in a digest excerpt before truncation.
 _DIGEST_EXCERPT_MAX = 300
 
 _cache_get = sync_to_async(cache.get)
 _cache_set = sync_to_async(cache.set)
+_cache_delete = sync_to_async(cache.delete)
+
+
+def _topic_not_found(exc: httpx.HTTPStatusError) -> bool:
+    """True if an httpx error is Telegram's 400 'message thread not found'."""
+    resp = getattr(exc, "response", None)
+    if resp is None or resp.status_code != 400:
+        return False
+    try:
+        desc = (resp.json() or {}).get("description", "")
+    except Exception:  # noqa: BLE001
+        desc = getattr(resp, "text", "") or ""
+    return "message thread not found" in desc.lower()
+
+
+@database_sync_to_async
+def _clear_topic_state(thread) -> None:
+    for k in (
+        "telegram_topic_id",
+        "telegram_digest_message_id",
+        "telegram_digest_steps",
+        "telegram_icon_color",
+    ):
+        thread.metadata.pop(k, None)
+    thread.save(update_fields=["metadata"])
 
 
 def pick_color(session_id: str) -> int:
@@ -65,6 +95,23 @@ def _clear_digest_state(thread) -> None:
 
 
 async def deliver_turn(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
+    try:
+        await _deliver_turn_once(thread, parsed, msg, forum_chat_id=forum_chat_id, api=api)
+    except httpx.HTTPStatusError as exc:
+        if not _topic_not_found(exc):
+            raise
+        log.warning(
+            "telegram topic stale for thread %s; clearing and recreating", thread.id
+        )
+        await _clear_topic_state(thread)
+        turn_uuid = parsed.get("uuid")
+        if turn_uuid:
+            await _cache_delete(f"observe:deliver:{thread.id}:{turn_uuid}")
+        # Retry once: topic_id is now cleared so _ensure_topic_id creates a fresh topic.
+        await _deliver_turn_once(thread, parsed, msg, forum_chat_id=forum_chat_id, api=api)
+
+
+async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) -> None:
     if api is None:
         api = telegram_api
 
@@ -248,4 +295,4 @@ async def deliver_turn_active(thread, parsed, msg, *, api=None) -> None:
 
             await database_sync_to_async(enqueue_text)(platform, recipient, text)
     except Exception:  # noqa: BLE001
-        pass
+        log.exception("deliver_turn_active failed for thread %s", getattr(thread, "id", "?"))
