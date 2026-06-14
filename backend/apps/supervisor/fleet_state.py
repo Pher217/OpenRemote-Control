@@ -81,6 +81,10 @@ def build_fleet_state() -> list[SessionDict]:
     threads = (
         Thread.objects.select_related("host")
         .exclude(status__in=list(_TERMINAL))
+        # Exclude Telegram chat surfaces (the operator's own DM/forum conversation
+        # with the bot has a TelegramChat row) — those are not coding sessions and
+        # must not appear in the fleet a session is reported to.
+        .filter(telegram_chat__isnull=True)
         .order_by("status", "-last_event_at")
     )
     result: list[SessionDict] = []
