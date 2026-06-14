@@ -11,6 +11,7 @@ _CONVERSATIONAL_EVENTS = _USER_EVENTS | _ASSISTANT_EVENTS
 @register_runtime_adapter
 class CodexAdapter:
     provider = "codex"
+    source_kind = "file"
     default_root_env = "OBSERVE_CODEX_SESSIONS_DIR"
     default_root = os.path.expanduser("~/.codex/sessions")
     discovery_glob = "**/*.jsonl"
