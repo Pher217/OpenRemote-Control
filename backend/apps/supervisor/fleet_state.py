@@ -43,12 +43,33 @@ def _needs_input(thread: Thread) -> bool:
     return thread.status == Thread.StatusChoices.WAITING_APPROVAL
 
 
+def _safe_label(thread: Thread) -> str:
+    """Content-safe display label for supervisor outbound messages.
+
+    Thread.name can embed free-form content: PTY threads are named
+    "orc-run: <command>" (apps/hostlink/consumers.py), so using thread.name
+    directly would leak the command body into the digest/push the supervisor
+    posts (Safety Contract #6 / S0.2 minimal-payload — no command bodies in
+    notifications, even bridged). The label is therefore derived from
+    server-controlled fields only: the repo basename from metadata when present,
+    else the runtime mode + a short thread id. Never thread.name.
+    """
+    meta = thread.metadata or {}
+    repo = meta.get("repo")
+    if isinstance(repo, str) and repo.strip():
+        base = repo.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+        if base:
+            return f"{thread.runtime_mode}:{base}"
+    return f"{thread.runtime_mode}:{str(thread.id)[:8]}"
+
+
 def build_fleet_state() -> list[SessionDict]:
     """Query non-terminal threads and return a plain-dict snapshot.
 
     Each dict contains:
       thread_id     — UUID str
-      label         — thread.name (project name or runtime label)
+      label         — content-safe label (repo basename or runtime:id; never the
+                      raw thread.name, which can embed a command body) — _safe_label
       runtime_mode  — e.g. "pty", "observed", "controlled"
       host          — host name or "local"
       status        — e.g. "running", "waiting_approval"
@@ -69,7 +90,7 @@ def build_fleet_state() -> list[SessionDict]:
         result.append(
             {
                 "thread_id": str(t.id),
-                "label": t.name,
+                "label": _safe_label(t),
                 "runtime_mode": t.runtime_mode,
                 "host": t.host.name if t.host else "local",
                 "status": t.status,
