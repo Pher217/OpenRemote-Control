@@ -478,6 +478,52 @@ class TestPtySessionGate:
         with pytest.raises(AssertionError, match="libtmux must not be called"):
             session.send_keys("test-session", "git status\n", approved=True)
 
+    def test_safe_approved_types_text_then_two_separate_enters(self, monkeypatch):
+        """
+        GIVEN safe, approved input
+        WHEN send_keys injects it into the pane
+        THEN the text is typed WITHOUT enter, then Enter is sent as a SEPARATE
+             key twice — the reliable-submit sequence for full-screen TUIs
+             (a single bundled Enter can be dropped during a redraw).
+        """
+        import agent_host.pty_session as pty_mod
+        from agent_host.pty_session import PtySession
+
+        # Don't actually sleep between keystrokes during the test.
+        monkeypatch.setattr(pty_mod.time, "sleep", lambda *_a, **_k: None)
+
+        calls = {"send_keys": [], "cmd": []}
+
+        class _FakePane:
+            def send_keys(self, text, enter=False, suppress_history=False):
+                calls["send_keys"].append((text, enter, suppress_history))
+
+            def cmd(self, *args):
+                calls["cmd"].append(args)
+
+        _pane = _FakePane()
+
+        class _FakeWindow:
+            active_pane = _pane
+
+        class _FakeSession:
+            active_window = _FakeWindow()
+
+        class _FakeServer:
+            class sessions:  # noqa: N801 — mimic libtmux attribute access
+                @staticmethod
+                def get(session_name=None, default=None):
+                    return _FakeSession()
+
+        session = PtySession()
+        session._server = lambda: _FakeServer()  # type: ignore[method-assign]
+
+        # Trailing newline must be stripped (we submit via a real Enter key).
+        session.send_keys("test-session", "git status\n", approved=True)
+
+        assert calls["send_keys"] == [("git status", False, False)]
+        assert calls["cmd"] == [("send-keys", "Enter"), ("send-keys", "Enter")]
+
     def test_libtmux_not_imported_by_input_policy(self):
         """input_policy must never cause libtmux to be imported."""
         # Re-import input_policy in a sub-check; the module is already loaded
