@@ -293,3 +293,123 @@ async def test_forum_reply_pty_session_with_host_and_tmux_creates_approval_promp
     assert prompt is not None
     assert prompt.surface_message_ref["action"] == "pty_inject"
     assert prompt.surface_message_ref["inject_text"] == "hello"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_forum_reply_auto_approve_injects_directly_no_prompt(settings):
+    """
+    GIVEN a PTY-mode thread with host, tmux_session_name, and metadata auto_approve=True
+    WHEN  handle_forum_reply is called with a reply text
+    THEN  async_send_pty_input is called with approved=True,
+          no APPROVAL Prompt is created in the DB,
+          and nothing is sent to the Telegram topic.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
+    settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
+
+    from apps.prompts.models import Prompt
+
+    account = await database_sync_to_async(_make_account)("aa1")
+    host = await database_sync_to_async(_make_host)("host-aa1")
+    thread = await database_sync_to_async(
+        lambda: Thread.objects.create(
+            name="fr-thread-auto-approve",
+            runtime="claude_code",
+            runtime_mode=Thread.RuntimeModeChoices.PTY,
+            account=account,
+            host=host,
+            metadata={
+                "telegram_topic_id": 88,
+                "telegram_forum_chat_id": -100111,
+                "tmux_session_name": "session-aa",
+                "auto_approve": True,
+            },
+        )
+    )()
+
+    mock_inject = AsyncMock()
+    send, send_calls = await _make_send()
+
+    with patch("apps.hostlink.service.async_send_pty_input", mock_inject):
+        await handle_forum_reply(-100111, 88, 111, "ls -la", send=send)
+
+    # async_send_pty_input must have been called once with approved=True
+    mock_inject.assert_called_once()
+    _, call_kwargs = mock_inject.call_args
+    assert call_kwargs.get("approved") is True
+    # positional arg [1] is the text
+    assert mock_inject.call_args.args[1] == "ls -la"
+
+    # No Telegram message should have been sent (no approval prompt delivered)
+    assert send_calls == []
+
+    # No APPROVAL Prompt created in DB
+    @database_sync_to_async
+    def _count_prompts():
+        return Prompt.objects.filter(
+            thread=thread,
+            prompt_type=Prompt.PromptType.APPROVAL,
+        ).count()
+
+    assert await _count_prompts() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_forum_reply_without_auto_approve_still_creates_approval_prompt(settings):
+    """
+    GIVEN a PTY-mode thread with host and tmux but WITHOUT auto_approve in metadata
+    WHEN  handle_forum_reply is called
+    THEN  an APPROVAL Prompt is created (normal approval gate applies),
+          and async_send_pty_input is NOT called directly.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
+    settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
+
+    from apps.prompts.models import Prompt
+
+    account = await database_sync_to_async(_make_account)("noaa1")
+    host = await database_sync_to_async(_make_host)("host-noaa1")
+    thread = await database_sync_to_async(
+        lambda: Thread.objects.create(
+            name="fr-thread-no-auto-approve",
+            runtime="claude_code",
+            runtime_mode=Thread.RuntimeModeChoices.PTY,
+            account=account,
+            host=host,
+            metadata={
+                "telegram_topic_id": 99,
+                "telegram_forum_chat_id": -100111,
+                "tmux_session_name": "session-noaa",
+                # no auto_approve key
+            },
+        )
+    )()
+
+    mock_inject = AsyncMock()
+    send, send_calls = await _make_send()
+
+    with patch("apps.hostlink.service.async_send_pty_input", mock_inject):
+        await handle_forum_reply(-100111, 99, 111, "ls -la", send=send)
+
+    # async_send_pty_input must NOT have been called directly
+    mock_inject.assert_not_called()
+
+    # An APPROVAL Prompt must have been created
+    @database_sync_to_async
+    def _count_prompts():
+        return Prompt.objects.filter(
+            thread=thread,
+            prompt_type=Prompt.PromptType.APPROVAL,
+        ).count()
+
+    assert await _count_prompts() == 1
+
+    # The approval request was delivered to Telegram
+    assert len(send_calls) == 1
+    assert "inject" in send_calls[0]["text"].lower()
