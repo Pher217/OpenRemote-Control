@@ -22,7 +22,6 @@ from apps.supervisor.activity import (
     render_fleet_with_activity,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared helper — plain SessionDict for pure tests
 # ---------------------------------------------------------------------------
@@ -318,7 +317,7 @@ def test_chat_surface_thread_excluded_from_fleet():
     )
     TelegramChat.objects.create(chat_id=123456, thread=chat_thread)
 
-    coding = Thread.objects.create(
+    Thread.objects.create(
         name="real-coding-session",
         runtime="claude_code",
         runtime_mode=Thread.RuntimeModeChoices.OBSERVED,

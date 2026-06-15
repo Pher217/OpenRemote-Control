@@ -23,7 +23,6 @@ import pytest
 
 from agent_host.wsclient import handle_host_command
 
-
 # ---------------------------------------------------------------------------
 # H1 — session.kill dispatches PtySession().kill(session_name)
 # ---------------------------------------------------------------------------

@@ -24,7 +24,8 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable
+from typing import Any
 
 import websockets
 
@@ -193,7 +194,6 @@ def handle_host_command(
         async def _start_and_stream() -> None:
             try:
                 from agent_host.pty_session import PtySession  # noqa: PLC0415
-                from agent_host.pty_stream import stream_pty_output  # noqa: PLC0415
 
                 pty = PtySession()
                 pty.start(session_name, command_str, cwd)
@@ -216,7 +216,6 @@ def handle_host_command(
             # route through the daemon's existing persistent connection via the
             # inline outbound queue.
             if incoming_queue is not None:
-                import json as _json  # noqa: PLC0415
 
                 try:
                     incoming_queue.put_nowait({
@@ -462,7 +461,10 @@ async def run_sender(
                             continue
                         if frame.get("type") == "host_command":
                             if frame.get("command") == "ping":
-                                last_pong[0] = time.monotonic()
+                                # noqa is safe: last_pong is a per-iteration list (line ~432),
+                                # and these closures are fully awaited via gather() before the
+                                # reconnect loop continues — no stale loop-variable binding.
+                                last_pong[0] = time.monotonic()  # noqa: B023
                             try:
                                 on_command(frame)
                             except Exception:
@@ -485,7 +487,9 @@ async def run_sender(
                         await asyncio.sleep(HEARTBEAT_INTERVAL / 2)
                         if stop.is_set():
                             return
-                        if time.monotonic() - last_pong[0] > HEARTBEAT_TIMEOUT:
+                        # last_pong is per-iteration shared state; closures are awaited within
+                        # the same loop pass (see gather below), so the binding is not stale.
+                        if time.monotonic() - last_pong[0] > HEARTBEAT_TIMEOUT:  # noqa: B023
                             log.warning(
                                 "heartbeat timeout (%.0fs) — channel path presumed dead; reconnecting",
                                 HEARTBEAT_TIMEOUT,

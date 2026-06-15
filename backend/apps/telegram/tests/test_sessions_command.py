@@ -19,7 +19,6 @@ from django.test import override_settings
 
 from apps.telegram.service import handle_update
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -57,12 +56,11 @@ async def test_sessions_command_allowlisted_sends_fleet_and_refreshes_dashboard(
     with patch(
         "apps.telegram.service.refresh_fleet_dashboard",
         new_callable=AsyncMock,
-    ) as mock_refresh:
-        with patch(
-            "apps.slash.handlers.sessions._active_threads",
-            return_value=[],
-        ):
-            await handle_update(12345, "/sessions", from_user_id=12345, send=send)
+    ) as mock_refresh, patch(
+        "apps.slash.handlers.sessions._active_threads",
+        return_value=[],
+    ):
+        await handle_update(12345, "/sessions", from_user_id=12345, send=send)
 
     # Fleet text was sent once.
     assert len(send.calls) == 1

@@ -13,7 +13,6 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.test import override_settings
 
-
 # Use the in-memory channel layer so no Redis is needed for this test.
 INMEM_CHANNEL_LAYERS = {
     "default": {

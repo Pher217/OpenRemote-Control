@@ -17,7 +17,6 @@ from apps.hosts.models import Host
 from apps.telegram.service import handle_forum_reply
 from apps.threads.models import Thread
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

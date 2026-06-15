@@ -14,7 +14,6 @@ import pytest
 
 from apps.telegram.service import handle_update
 
-
 # ---------------------------------------------------------------------------
 # Fake Ollama adapter that captures history messages
 # ---------------------------------------------------------------------------

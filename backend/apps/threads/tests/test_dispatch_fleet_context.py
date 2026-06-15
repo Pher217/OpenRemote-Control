@@ -20,7 +20,6 @@ from apps.accounts.models import Account
 from apps.threads.dispatch import dispatch_text
 from apps.threads.models import Message, Thread
 
-
 # ---------------------------------------------------------------------------
 # Fake adapter infrastructure — captures the history passed to stream()
 # ---------------------------------------------------------------------------

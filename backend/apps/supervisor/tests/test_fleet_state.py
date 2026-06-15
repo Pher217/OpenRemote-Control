@@ -9,13 +9,12 @@ Coverage:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from apps.supervisor.fleet_state import build_fleet_state, group_fleet_state
 from apps.threads.models import Thread
-
 
 # ---------------------------------------------------------------------------
 # Helpers — plain dicts (no DB required for group_fleet_state tests)
@@ -243,7 +242,7 @@ def test_build_fleet_state_includes_active_threads():
         runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
         status=Thread.StatusChoices.RUNNING,
         account=account,
-        last_event_at=datetime.now(tz=timezone.utc),
+        last_event_at=datetime.now(tz=UTC),
     )
 
     result = build_fleet_state()

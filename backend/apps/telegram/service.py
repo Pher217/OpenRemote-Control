@@ -12,7 +12,8 @@ from apps.accounts.models import Account
 from apps.audit.models import AuditEvent
 from apps.hosts.models import Host
 from apps.prompts.models import Prompt
-from apps.prompts.service import create_prompt, resolve as resolve_prompt
+from apps.prompts.service import create_prompt
+from apps.prompts.service import resolve as resolve_prompt
 from apps.prompts.surfaces.telegram import build_reply_markup, parse_callback
 from apps.slash.fleet_dashboard import refresh_fleet_dashboard
 from apps.slash.handlers.sessions import _active_threads, render_fleet
@@ -303,14 +304,14 @@ async def handle_update(chat_id: int, text: str, *, from_user_id: int | None, se
     # Privileged fleet/admin commands require the AUTHENTICATED USER in the allowlist,
     # not merely an allowlisted chat (invariant #9). Fail-closed when from_user_id is
     # missing or not allowlisted.
-    if stripped.startswith(("/sessions", "/stop", "/run", "/pair")):
+    if stripped.startswith(("/sessions", "/stop", "/run", "/pair")):  # noqa: SIM102 — keep nested for the auth-gate comment above
         if from_user_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
             return
 
     # /sessions — global fleet view (operator-only; auth gate is the check above).
     if stripped.startswith("/sessions"):
         threads = await database_sync_to_async(_active_threads)()
-        now = _dt.datetime.now(tz=_dt.timezone.utc)
+        now = _dt.datetime.now(tz=_dt.UTC)
         fleet_text = render_fleet(threads, now)
         await send(chat_id, fleet_text, parse_mode="HTML")
         await refresh_fleet_dashboard()

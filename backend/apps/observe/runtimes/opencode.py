@@ -1,7 +1,6 @@
 import json
 import os
 import sqlite3
-
 from pathlib import Path
 
 from apps.observe.runtimes import register_runtime_adapter
@@ -116,7 +115,9 @@ class OpenCodeAdapter:
             conn = sqlite3.connect(path)
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                f"SELECT {OPENCODE_DB_COL_SESSION_ID} AS {OPENCODE_KEY_SESSION_ID}, "
+                # nosec B608 — every interpolated token is a module-level schema constant
+                # (OPENCODE_TABLE_* / OPENCODE_DB_COL_* / OPENCODE_KEY_*), never user input.
+                f"SELECT {OPENCODE_DB_COL_SESSION_ID} AS {OPENCODE_KEY_SESSION_ID}, "  # nosec B608
                 f"{OPENCODE_DB_COL_SESSION_PATH} AS {OPENCODE_KEY_CWD}, "
                 f"{OPENCODE_DB_COL_SESSION_BRANCH} AS {OPENCODE_KEY_BRANCH}, "
                 f"{OPENCODE_DB_COL_SESSION_NAME} AS {OPENCODE_KEY_TITLE} "
@@ -155,7 +156,9 @@ class OpenCodeAdapter:
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.execute(
-                f"SELECT m.{OPENCODE_DB_COL_MSG_ID} AS {OPENCODE_ALIAS_MSG_ID}, "
+                # nosec B608 — interpolated tokens are module-level schema constants; the only
+                # dynamic value (last_msg_id) is bound via the ? placeholder in the WHERE clause.
+                f"SELECT m.{OPENCODE_DB_COL_MSG_ID} AS {OPENCODE_ALIAS_MSG_ID}, "  # nosec B608
                 f"m.{OPENCODE_DB_COL_MSG_SESSION_ID} AS {OPENCODE_KEY_SESSION_ID}, "
                 f"m.{OPENCODE_DB_COL_MSG_ROLE} AS {OPENCODE_KEY_ROLE}, "
                 f"m.{OPENCODE_DB_COL_MSG_CONTENT} AS {OPENCODE_KEY_CONTENT}, "

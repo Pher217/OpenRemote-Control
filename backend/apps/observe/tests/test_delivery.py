@@ -3,6 +3,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 from django.core.cache import cache
+from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from apps.observe.delivery import TELEGRAM_MAX, _topic_name, deliver_turn, pick_color
@@ -10,7 +11,6 @@ from apps.observe.service import apply_session_meta, get_or_create_observed_thre
 from apps.observe.validators import VALID_DELIVERY_MODES, validate_observe_delivery_mode
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 from apps.threads.models import Thread
-from django.core.exceptions import ImproperlyConfigured
 
 _cache_clear = sync_to_async(cache.clear)
 
@@ -526,7 +526,6 @@ async def test_send_message_returns_id_and_edit_uses_it():
             api=fake,
         )
         # At this point intro was send_calls[0] (msg_id=100), digest was send_calls[1] (msg_id=101).
-        first_digest_id = fake.send_calls[1][0]  # chat_id — need the returned id instead
 
         @database_sync_to_async
         def _stored_digest_id():

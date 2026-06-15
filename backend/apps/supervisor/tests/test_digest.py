@@ -12,10 +12,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
-
 from apps.supervisor.digest import render_digest
-
 
 # ---------------------------------------------------------------------------
 # Helpers

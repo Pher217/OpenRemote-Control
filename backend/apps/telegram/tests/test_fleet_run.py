@@ -150,7 +150,6 @@ async def test_run_allow_dispatches_session_start_with_bound_command(settings):
     from apps.prompts.service import create_prompt
     from apps.telegram.service import handle_callback_query
     from apps.threads.models import Thread
-    from apps.accounts.models import Account
 
     host = await database_sync_to_async(_make_host)("run-host-r2")
 
@@ -218,7 +217,7 @@ async def test_run_allow_dispatches_session_start_with_bound_command(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.5)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     frame = await _try_receive()
@@ -260,7 +259,6 @@ async def test_run_deny_does_not_launch(settings):
     from apps.prompts.service import create_prompt
     from apps.telegram.service import handle_callback_query
     from apps.threads.models import Thread
-    from apps.accounts.models import Account
 
     host = await database_sync_to_async(_make_host)("run-host-r3")
     account = await database_sync_to_async(_make_account)("r3")
@@ -309,7 +307,7 @@ async def test_run_deny_does_not_launch(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.15)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     frame = await _try_receive()
@@ -514,7 +512,6 @@ async def test_run_allow_session_start_frame_shape(settings):
     from apps.prompts.service import create_prompt
     from apps.telegram.service import handle_callback_query
     from apps.threads.models import Thread
-    from apps.accounts.models import Account
 
     host = await database_sync_to_async(_make_host)("run-host-r7")
     account = await database_sync_to_async(_make_account)("r7")
@@ -567,7 +564,7 @@ async def test_run_allow_session_start_frame_shape(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.5)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     frame = await _try_receive()
