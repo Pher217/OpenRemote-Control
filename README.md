@@ -1,6 +1,6 @@
 # OpenRemote Control
 
-> A self-hosted control plane for the AI coding agents you already run — Claude Code, Codex, Gemini, and any MCP tool like Cursor or Copilot, across all your machines — routed into one Telegram/Matrix inbox you supervise from your phone.
+> A self-hosted control plane for the AI coding agents you already run — Claude Code, Codex, Gemini, and any MCP tool like Cursor or Copilot, across all your machines — routed into one chat inbox (Telegram, or WhatsApp / Slack / Signal) you supervise from your phone.
 
 AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard.
 
@@ -14,9 +14,9 @@ It's sovereign by design: you host it, your sessions and credentials never leave
    Coding agents & machines              OpenRemote Control       Your app of choice
  ─────────────────────────────       ─────────────────────       ─────────────────────
  Claude Code / Codex / Cursor …                                  Telegram
-   /openremote-control      ──▶                                  Matrix
- host-agent (each machine)  ──▶  ──▶  one chat session per  ◀─▶  WhatsApp / Slack /
- observe (read-only tail)   ──▶       agent · policy ·            Signal
+   /openremote-control      ──▶                                  WhatsApp / Slack /
+ host-agent (each machine)  ──▶  ──▶  one chat session per  ◀─▶  Discord / Signal /
+ observe (read-only tail)   ──▶       agent · policy ·            iMessage
    via orc-mcp dispatch              approvals · audit
 ```
 
@@ -39,6 +39,26 @@ Agents reach that same chat two ways:
 
    This is opt-in and agent-initiated — the agent calls out to you. No vendor API is impersonated, no closed UI is driven.
 
+## Repository layout
+
+```
+backend/              Django + DRF + Channels control plane (ASGI)
+  apps/
+    accounts hosts projects     fleet inventory: agent accounts, machines, projects
+    threads prompts approvals    session primitives: conversations, answer-in-chat, gated actions
+    observe                      read-only watcher + per-agent runtime adapters (runtimes/)
+    hostlink                     host-daemon enrollment + PTY/command WebSocket consumer
+    connectors gateway           universal MCP bridge backend + messaging-gateway backend
+    telegram slash supervisor    Telegram surface, slash commands, fleet-aware digest
+    policies audit tier2 skills   guardrails, append-only audit log, local chat model, skill registry
+  config/                        settings, ASGI/WSGI, Channels routing, Celery
+host-agent/           Python daemon per machine: enrollment, PTY streaming, input-safety policy
+connectors/
+  orc-mcp/            installable MCP bridge client (openremote_control / notify / ask_human / request_approval)
+  messaging-gateway/  Node/TS sidecar bridging WhatsApp / Slack / Discord / Signal / iMessage
+deploy/               Docker Compose, Caddy, and headscale deployment configs
+```
+
 ## Status — backend foundation in place
 
 The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenRemote-Control/pull/1)–[#6](https://github.com/Pher217/OpenRemote-Control/pull/6) merged, **~438 tests passing**, live ASGI smoke test green.
@@ -49,13 +69,13 @@ The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenR
 - Interactive **answer-in-chat** (the `Prompt` primitive)
 - The universal **`/openremote-control`** command — run it inside your coding agent to dispatch that session to your chat app (the `openremote_control` orc-mcp tool + a shipped Claude Code command)
 - The **universal MCP bridge** — `apps.connectors` backend + the installable [`orc-mcp`](connectors/orc-mcp/README.md) client
-- **Telegram + Matrix** surfaces (→ WhatsApp / Slack / Signal via mautrix bridges)
+- **Telegram** surface + the **messaging-gateway** connector (→ WhatsApp / Slack / Discord / Signal / iMessage)
 - **Multi-host** backend (`apps.hostlink`) + a **host daemon client** (`host-agent`: `orc-host enroll | daemon`)
 - A **PTY input-safety core** that the next milestone builds on
 
 **In progress / next:**
 
-- A **deploy runbook** (docker-compose: Matrix homeserver + bridges + headscale; daemon on a second machine)
+- A **deploy runbook** (docker-compose: backend + messaging-gateway sidecar + headscale; daemon on a second machine)
 - `orc run` — approval-gated remote terminal (PTY) streaming, building on the existing input-safety core
 - Per-connector keypair identity hardening (replacing the shared bearer token) before any multi-user use
 
@@ -66,7 +86,7 @@ The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenR
 - **Multi-runtime** — Claude Code, Codex, and Gemini today via the runtime registry; any MCP tool via the bridge.
 - **Two-way, not just a viewer** — agents ask, you answer; agents request, you approve — right from chat.
 - **Policy + approval + audit built in** — sensitivity-aware project profiles, risk-tiered approvals, and an append-only Postgres audit log across heterogeneous runtimes.
-- **Surfaces you already use** — Telegram and Matrix today; Matrix bridges fan out to WhatsApp, Slack, Signal, and more.
+- **Surfaces you already use** — Telegram today; the messaging-gateway connector fans out to WhatsApp, Slack, Discord, Signal, and iMessage.
 
 ## What it is not
 
