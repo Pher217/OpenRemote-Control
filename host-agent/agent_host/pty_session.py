@@ -31,7 +31,15 @@ that only test the pure-Python safety core).
 
 from __future__ import annotations
 
+import time
+
 from agent_host.input_policy import classify_input
+
+# Delay between the typed prompt and each submit Enter, and between the two
+# Enters. A full-screen TUI (e.g. claude) can drop an Enter that arrives in the
+# same burst as the pasted text or during a redraw; spacing the Enters out and
+# sending two makes a dropped submit very unlikely.
+_SUBMIT_KEY_DELAY = 0.12
 
 
 class PtySession:
@@ -218,6 +226,16 @@ class PtySession:
             raise KeyError(f"PTY session {name!r} not found")
 
         pane = session.active_window.active_pane
-        # suppress_history=False keeps the command in the shell's history
-        # which aids auditability.
-        pane.send_keys(text, enter=False, suppress_history=False)
+        stripped = text.rstrip("\n")
+        # Type the prompt WITHOUT submitting (suppress_history=False keeps it in
+        # shell history for auditability).
+        pane.send_keys(stripped, enter=False, suppress_history=False)
+        # Submit by sending Enter as a SEPARATE key, twice with a short gap.
+        # Sending text+Enter together (enter=True) can race a full-screen TUI's
+        # redraw and drop the Enter, leaving the prompt sitting unsubmitted in
+        # the input box (observed with claude). A second Enter is a harmless
+        # no-op on already-submitted/empty input, so two spaced Enters make a
+        # dropped submit very unlikely while never double-submitting real text.
+        for _ in range(2):
+            time.sleep(_SUBMIT_KEY_DELAY)
+            pane.cmd("send-keys", "Enter")
