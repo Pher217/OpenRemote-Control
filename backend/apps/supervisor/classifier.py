@@ -1,7 +1,7 @@
 """
 Major-step classifier for the Fleet Supervisor (S2).
 
-Pure functions over fleet state snapshots — no I/O, no DB, no model calls.
+Pure functions over fleet state snapshot — no I/O, no DB, no model calls.
 
 A "major step" is triggered ONLY by a server-observed structural fact:
   - a status transition (prev status → curr status comparison)
@@ -123,6 +123,84 @@ def _is_stalled(session: SessionDict) -> bool:
     return age >= STALL_THRESHOLD
 
 
+def _classify_against_prior(
+    session: SessionDict,
+    prior: SessionDict | None,
+) -> MajorStep | None:
+    """Classify a single current session against its prior snapshot, if any.
+
+    Returns a MajorStep when a trigger fires, otherwise None.  At most one
+    trigger is evaluated per session, in priority order:
+    STARTED > FINISHED > NEEDS_INPUT > STALLED.
+    """
+    tid = session["thread_id"]
+    status = session["status"]
+
+    if prior is None:
+        return MajorStep(
+            thread_id=tid,
+            label=session["label"],
+            kind=StepKind.STARTED,
+            severity=Severity.STARTED,
+        )
+
+    prior_status = prior["status"]
+
+    if status in _TERMINAL_STATUSES and prior_status not in _TERMINAL_STATUSES:
+        return MajorStep(
+            thread_id=tid,
+            label=session["label"],
+            kind=StepKind.FINISHED,
+            severity=_severity_for(StepKind.FINISHED, status),
+        )
+
+    if status == "waiting_approval" and prior_status != "waiting_approval":
+        return MajorStep(
+            thread_id=tid,
+            label=session["label"],
+            kind=StepKind.NEEDS_INPUT,
+            severity=Severity.NEEDS_INPUT,
+        )
+
+    if status not in _TERMINAL_STATUSES and status != "waiting_approval":
+        prev_ts = prior.get("last_event_at")
+        curr_ts = session.get("last_event_at")
+        if prev_ts == curr_ts and _is_stalled(session):
+            return MajorStep(
+                thread_id=tid,
+                label=session["label"],
+                kind=StepKind.STALLED,
+                severity=Severity.STALLED,
+            )
+
+    return None
+
+
+def _finished_by_disappearance(
+    prev: list[SessionDict],
+    curr: list[SessionDict],
+) -> list[MajorStep]:
+    """Detect sessions that finished by disappearing between snapshots."""
+    curr_ids = {s["thread_id"] for s in curr}
+    steps: list[MajorStep] = []
+
+    for session in prev:
+        if session["thread_id"] in curr_ids:
+            continue
+        if session["status"] in _TERMINAL_STATUSES:
+            continue
+        steps.append(
+            MajorStep(
+                thread_id=session["thread_id"],
+                label=session["label"],
+                kind=StepKind.FINISHED,
+                severity=_severity_for(StepKind.FINISHED, session["status"]),
+            )
+        )
+
+    return steps
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -153,84 +231,11 @@ def detect_major_steps(
     steps: list[MajorStep] = []
 
     for session in curr:
-        tid = session["thread_id"]
-        status = session["status"]
-        prior = prev_by_id.get(tid)
+        step = _classify_against_prior(session, prev_by_id.get(session["thread_id"]))
+        if step is not None:
+            steps.append(step)
 
-        if prior is None:
-            # New session — STARTED
-            steps.append(
-                MajorStep(
-                    thread_id=tid,
-                    label=session["label"],
-                    kind=StepKind.STARTED,
-                    severity=Severity.STARTED,
-                )
-            )
-            continue
-
-        prior_status = prior["status"]
-
-        # FINISHED: entered a terminal status (and wasn't terminal before)
-        if status in _TERMINAL_STATUSES and prior_status not in _TERMINAL_STATUSES:
-            steps.append(
-                MajorStep(
-                    thread_id=tid,
-                    label=session["label"],
-                    kind=StepKind.FINISHED,
-                    severity=_severity_for(StepKind.FINISHED, status),
-                )
-            )
-            continue
-
-        # NEEDS_INPUT: entered waiting_approval
-        if status == "waiting_approval" and prior_status != "waiting_approval":
-            steps.append(
-                MajorStep(
-                    thread_id=tid,
-                    label=session["label"],
-                    kind=StepKind.NEEDS_INPUT,
-                    severity=Severity.NEEDS_INPUT,
-                )
-            )
-            continue
-
-        # STALLED: non-terminal, last_event_at unchanged, silence >= threshold
-        if status not in _TERMINAL_STATUSES and status != "waiting_approval":
-            prev_ts = prior.get("last_event_at")
-            curr_ts = session.get("last_event_at")
-            timestamps_unchanged = prev_ts == curr_ts
-            if timestamps_unchanged and _is_stalled(session):
-                steps.append(
-                    MajorStep(
-                        thread_id=tid,
-                        label=session["label"],
-                        kind=StepKind.STALLED,
-                        severity=Severity.STALLED,
-                    )
-                )
-
-    # FINISHED via disappearance: build_fleet_state() excludes terminal sessions,
-    # so a session that finishes simply leaves the active snapshot rather than
-    # appearing in `curr` with a terminal status. Detect "finished" as a thread
-    # that was active in `prev` but is absent from `curr`. The terminal status is
-    # no longer observable here, so completed/failed cannot be distinguished —
-    # emit a plain FINISHED. (The in-loop terminal-transition branch above still
-    # fires if a caller ever passes a snapshot that DOES include terminals.)
-    curr_ids = {s["thread_id"] for s in curr}
-    for session in prev:
-        if session["thread_id"] in curr_ids:
-            continue
-        if session["status"] in _TERMINAL_STATUSES:
-            continue  # already terminal in prev — not a fresh finish
-        steps.append(
-            MajorStep(
-                thread_id=session["thread_id"],
-                label=session["label"],
-                kind=StepKind.FINISHED,
-                severity=_severity_for(StepKind.FINISHED, session["status"]),
-            )
-        )
+    steps.extend(_finished_by_disappearance(prev, curr))
 
     return steps
 
