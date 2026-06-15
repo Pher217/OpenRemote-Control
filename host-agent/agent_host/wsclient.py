@@ -244,6 +244,23 @@ def handle_host_command(
         log.warning("host_command: unknown command %r — ignoring", command)
 
 
+def _build_reconcile_frame() -> dict | None:
+    """Build a session.pty_reconcile frame with live tmux session names.
+
+    Returns None when enumeration fails (no tmux server, libtmux error, etc.).
+    Callers MUST skip sending when None is returned — never send an empty list
+    caused by an error, as that would falsely mark every session dead.
+    """
+    try:
+        from agent_host.pty_session import PtySession  # noqa: PLC0415
+
+        names = PtySession().list_live_sessions()
+        return {"type": "session.pty_reconcile", "data": {"session_names": names}}
+    except Exception:
+        log.debug("pty_reconcile: enumeration failed — skipping frame this cycle")
+        return None
+
+
 async def _stream_via_queue(outbound_queue: asyncio.Queue, pty: Any, session_name: str) -> None:
     """Stream PTY output as queue events (for the daemon's persistent WebSocket).
 
@@ -429,6 +446,16 @@ async def run_sender(
                 # it to disk.  The next connection drains that queue first.
                 # ------------------------------------------------------------------
 
+                # Send a reconcile frame right after connection is established so
+                # the backend can immediately mark dead sessions COMPLETED on
+                # (re)connect, before the first heartbeat fires.
+                _reconcile = _build_reconcile_frame()
+                if _reconcile is not None:
+                    try:
+                        await ws.send(json.dumps(_reconcile))
+                    except Exception:
+                        log.debug("pty_reconcile: initial send failed — continuing")
+
                 last_pong = [time.monotonic()]
 
                 async def _sender() -> None:
@@ -481,6 +508,15 @@ async def run_sender(
                         except Exception:
                             # Send failed — propagate so gather tears down and reconnects.
                             raise
+                        # Send reconcile frame alongside each heartbeat.  If
+                        # enumeration fails, _build_reconcile_frame returns None and
+                        # we skip — never send an empty list due to an error.
+                        _hb_reconcile = _build_reconcile_frame()
+                        if _hb_reconcile is not None:
+                            try:
+                                await ws.send(json.dumps(_hb_reconcile))
+                            except Exception:
+                                raise
 
                 async def _watchdog() -> None:
                     while not stop.is_set():
