@@ -10,6 +10,8 @@ from apps.slash.handlers import get_handler
 from apps.slash.parser import parse
 from apps.threads.models import Message, Thread
 
+_MAX_HISTORY_MESSAGES = 200
+
 
 async def dispatch_text(thread, text, *, on_event, extra_system_context: str | None = None):
     if not (text or "").strip():
@@ -106,8 +108,9 @@ def _persist_message(thread, role, text):
 @database_sync_to_async
 def _build_history(thread):
     allowed = {"user", "assistant", "system"}
-    return [
-        {"role": m.role, "content": m.redacted_content}
-        for m in Message.objects.filter(thread=thread).order_by("sequence")
-        if m.role in allowed
-    ]
+    recent = list(
+        Message.objects.filter(thread=thread, role__in=allowed)
+        .order_by("-sequence")[:_MAX_HISTORY_MESSAGES]
+    )
+    recent.reverse()
+    return [{"role": m.role, "content": m.redacted_content} for m in recent]
