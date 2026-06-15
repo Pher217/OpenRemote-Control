@@ -11,16 +11,14 @@ without a database or network.
 
 import re
 
+from apps.core.html import _esc
+
 _FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 _BARE_URL_RE = re.compile(r"(?<!href=\")(?<!>)(https?://[^\s<]+)")
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$", re.MULTILINE)
-
-
-def _esc(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _convert_text(text: str) -> str:

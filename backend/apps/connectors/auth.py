@@ -4,21 +4,15 @@ Supports ed25519 request-signature authentication per connector key plus a
 legacy shared bearer token fallback, and routes principal checks for the
 MCP chat-surface bridge.
 """
-import hmac
 import time
 
-from django.conf import settings
 from django.core.cache import cache
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
-from rest_framework.permissions import BasePermission
 
 from apps.connectors.crypto import verify_signature
 from apps.connectors.models import ConnectorKey
-
-
-def _get_token() -> str:
-    return getattr(settings, "ORC_CONNECTOR_TOKEN", "")
+from apps.core.auth import BearerTokenPermission
 
 
 class ConnectorSignatureAuthentication(BaseAuthentication):
@@ -110,7 +104,7 @@ class ConnectorBearerAuthentication(BaseAuthentication):
         return "Bearer"
 
 
-class HasConnectorToken(BasePermission):
+class HasConnectorToken(BearerTokenPermission):
     """Bearer token gate for the connector bridge endpoints.
 
     Accepts requests that are EITHER:
@@ -121,20 +115,13 @@ class HasConnectorToken(BasePermission):
     is not signature-authenticated.
     """
 
+    settings_attr = "ORC_CONNECTOR_TOKEN"
+    unconfigured_flag = "_connector_token_unconfigured"
+
     def has_permission(self, request, view) -> bool:
         # If the request is already signature-authenticated, allow it through.
         if isinstance(request.successful_authenticator, ConnectorSignatureAuthentication):
             return True
 
         # Legacy shared-token path (DEPRECATED — migrate to Ed25519).
-        expected = _get_token()
-        if not expected:
-            request._connector_token_unconfigured = True
-            return False
-
-        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
-        if not auth_header.lower().startswith("bearer "):
-            return False
-
-        provided = auth_header[len("bearer "):].strip()
-        return hmac.compare_digest(provided.encode(), expected.encode())
+        return super().has_permission(request, view)

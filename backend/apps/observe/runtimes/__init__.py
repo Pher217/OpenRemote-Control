@@ -10,6 +10,38 @@ class UnknownRuntimeError(Exception):
     """Raised when no observe runtime adapter is registered for a provider."""
 
 
+def _cwd_to_repo(cwd: str) -> str:
+    """Extract the repository name from a working-directory path.
+
+    Cross-platform: normalises backslashes so a Windows path observed on
+    macOS/Linux still yields the rightmost path component.
+    """
+    return cwd.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+class JsonlScanMixin:
+    """Mixin that provides a concrete scan_file_meta for JSONL-based adapters."""
+
+    def scan_file_meta(self, path: str) -> dict:
+        """Iterate every line of a JSONL session file and merge session metadata.
+
+        The session_id is stripped from the merged result (it belongs on the
+        individual turn, not the file-level summary).
+        Returns {} on any OSError (missing file, permission denied, etc.).
+        """
+        merged: dict = {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    m = self.extract_session_meta(line)  # type: ignore[attr-defined]
+                    m.pop("session_id", None)
+                    if m:
+                        merged.update(m)
+        except OSError:
+            return {}
+        return merged
+
+
 @runtime_checkable
 class RuntimeAdapter(Protocol):
     provider: str

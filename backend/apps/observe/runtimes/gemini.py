@@ -6,7 +6,7 @@ user/gemini JSONL records into normalized conversation turns (role/text/uuid/ses
 import json
 import os
 
-from apps.observe.runtimes import register_runtime_adapter
+from apps.observe.runtimes import JsonlScanMixin, _cwd_to_repo, register_runtime_adapter
 
 # Gemini CLI JSONL format (documented, not verified against a live sample — no
 # ~/.gemini/tmp/ directory was found on this machine).
@@ -22,7 +22,7 @@ from apps.observe.runtimes import register_runtime_adapter
 
 
 @register_runtime_adapter
-class GeminiAdapter:
+class GeminiAdapter(JsonlScanMixin):
     provider = "gemini"
     source_kind = "file"
     default_root_env = "OBSERVE_GEMINI_TMP_DIR"
@@ -116,7 +116,7 @@ class GeminiAdapter:
         if isinstance(cwd, str):
             # Cross-platform basename: normalise backslashes so a Windows path
             # observed on macOS/Linux still yields the rightmost component.
-            meta["repo"] = cwd.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            meta["repo"] = _cwd_to_repo(cwd)
 
         branch = obj.get("gitBranch") or obj.get("branch")
         if isinstance(branch, str):
@@ -127,22 +127,3 @@ class GeminiAdapter:
             meta["title"] = title
 
         return meta
-
-    def scan_file_meta(self, path: str) -> dict:
-        """Iterate every line of a JSONL session file and merge session metadata.
-
-        The session_id is stripped from the merged result (it belongs on the
-        individual turn, not the file-level summary) — mirroring claude_code.py.
-        Returns {} on any OSError (missing file, permission denied, etc.).
-        """
-        merged: dict = {}
-        try:
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    m = self.extract_session_meta(line)
-                    m.pop("session_id", None)
-                    if m:
-                        merged.update(m)
-        except OSError:
-            return {}
-        return merged

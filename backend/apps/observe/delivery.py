@@ -177,6 +177,7 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
                 disable_notification=False,
             )
         except Exception:
+            log.debug("user HTML send failed, falling back to plain text", exc_info=True)
             label = settings.TELEGRAM_USER_LABEL
             plain = f"{label}: {parsed['text'][:3900]}"
             await api.send_message(
@@ -201,6 +202,7 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
                 disable_notification=True,
             )
         except Exception:
+            log.debug("assistant HTML send failed (all mode), falling back to plain text", exc_info=True)
             label = settings.TELEGRAM_ASSISTANT_LABEL
             plain = f"{label}: {parsed['text'][:3900]}"
             await api.send_message(
@@ -226,6 +228,7 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
                 disable_notification=True,
             )
         except Exception:
+            log.debug("new digest HTML send failed, falling back to plain text", exc_info=True)
             label = settings.TELEGRAM_ASSISTANT_LABEL
             plain = f"{label}: {parsed['text'][:3900]}"
             new_id = await api.send_message(
@@ -260,6 +263,7 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
                     disable_notification=True,
                 )
             except Exception:
+                log.debug("fresh digest HTML send failed after stale edit, falling back to plain text", exc_info=True)
                 plain = f"{label}: {parsed['text'][:3900]}"
                 new_id = await api.send_message(
                     forum_chat_id,

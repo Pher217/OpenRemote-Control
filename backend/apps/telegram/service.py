@@ -309,9 +309,7 @@ async def handle_forum_reply(
 
         @database_sync_to_async
         def _fetch_host():
-            from apps.threads.models import Thread as _T  # noqa: PLC0415
-
-            return _T.objects.select_related("host").get(id=thread.id)
+            return Thread.objects.select_related("host").get(id=thread.id)
 
         t_h = await _fetch_host()
         from apps.hostlink.service import send_host_command  # noqa: PLC0415
@@ -337,9 +335,7 @@ async def handle_forum_reply(
 
         @database_sync_to_async
         def _fetch_with_host():
-            from apps.threads.models import Thread as _T  # noqa: PLC0415
-
-            return _T.objects.select_related("host").get(id=thread.id)
+            return Thread.objects.select_related("host").get(id=thread.id)
 
         t_h = await _fetch_with_host()
         from apps.hostlink.service import async_send_pty_input  # noqa: PLC0415

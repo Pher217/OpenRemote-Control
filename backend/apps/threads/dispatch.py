@@ -10,6 +10,8 @@ from apps.slash.handlers import get_handler
 from apps.slash.parser import parse
 from apps.threads.models import Message, Thread
 
+_MAX_HISTORY_MESSAGES = 200
+
 
 async def dispatch_text(thread, text, *, on_event, extra_system_context: str | None = None):
     if not (text or "").strip():
@@ -91,10 +93,12 @@ def _get_thread(thread_id):
 
 @database_sync_to_async
 def _persist_message(thread, role, text):
-    from django.db.models import Max
-
     nxt = (
-        Message.objects.filter(thread=thread).aggregate(m=Max("sequence"))["m"] or 0
+        Message.objects.filter(thread=thread)
+        .order_by("-sequence")
+        .values_list("sequence", flat=True)
+        .first()
+        or 0
     ) + 1
     return Message.objects.create(
         thread=thread, role=role, redacted_content=text, sequence=nxt
@@ -104,8 +108,9 @@ def _persist_message(thread, role, text):
 @database_sync_to_async
 def _build_history(thread):
     allowed = {"user", "assistant", "system"}
-    return [
-        {"role": m.role, "content": m.redacted_content}
-        for m in Message.objects.filter(thread=thread).order_by("sequence")
-        if m.role in allowed
-    ]
+    recent = list(
+        Message.objects.filter(thread=thread, role__in=allowed)
+        .order_by("-sequence")[:_MAX_HISTORY_MESSAGES]
+    )
+    recent.reverse()
+    return [{"role": m.role, "content": m.redacted_content} for m in recent]

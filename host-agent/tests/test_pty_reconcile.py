@@ -20,7 +20,6 @@ from agent_host.config import HostConfig
 from agent_host.queue import OfflineQueue
 from agent_host.wsclient import _build_reconcile_frame, run_sender
 
-
 # ---------------------------------------------------------------------------
 # PtySession.list_live_sessions
 # ---------------------------------------------------------------------------
@@ -92,7 +91,6 @@ def test_build_reconcile_frame_returns_correct_frame(monkeypatch):
     WHEN _build_reconcile_frame() is called
     THEN it returns {"type": "session.pty_reconcile", "data": {"session_names": ["s1", "s2"]}}.
     """
-    from agent_host.pty_session import PtySession
 
     class FakeSession:
         def __init__(self, name):
@@ -116,7 +114,6 @@ def test_build_reconcile_frame_returns_none_on_error(monkeypatch):
     WHEN _build_reconcile_frame() is called
     THEN it returns None (fail-safe — never send empty list on error).
     """
-    from agent_host.pty_session import PtySession
 
     def _boom():
         raise RuntimeError("no tmux")
@@ -133,7 +130,6 @@ def test_build_reconcile_frame_empty_list_on_no_sessions(monkeypatch):
     WHEN _build_reconcile_frame() is called
     THEN it returns a frame with an empty session_names list (legitimate empty reconcile).
     """
-    from agent_host.pty_session import PtySession
 
     class FakeServer:
         sessions = []
@@ -168,7 +164,6 @@ def test_run_sender_sends_reconcile_on_connect(tmp_path, monkeypatch):
     WHEN run_sender() connects
     THEN a session.pty_reconcile frame is sent immediately (before the first heartbeat).
     """
-    from agent_host.pty_session import PtySession
 
     class FakeSession:
         def __init__(self, name):
@@ -204,7 +199,6 @@ def test_run_sender_skips_reconcile_when_tmux_unavailable(tmp_path, monkeypatch)
     WHEN run_sender() connects
     THEN NO session.pty_reconcile frame is sent (fail-safe — never send on error).
     """
-    from agent_host.pty_session import PtySession
 
     def _boom():
         raise RuntimeError("no tmux")

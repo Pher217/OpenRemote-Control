@@ -32,7 +32,7 @@ def _make_pty_thread(host, session_name, *, status=Thread.StatusChoices.RUNNING)
     )
     return Thread.objects.create(
         external_session_ref=session_name,
-        name=f"orc-run: test",
+        name="orc-run: test",
         runtime="pty",
         runtime_mode=Thread.RuntimeModeChoices.PTY,
         host=host,

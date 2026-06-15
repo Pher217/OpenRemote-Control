@@ -4,15 +4,9 @@ The messaging-gateway sidecar authenticates with a shared secret provided
 via the MESSAGING_GATEWAY_TOKEN setting.
 """
 
-import hmac
-
-from django.conf import settings
 from rest_framework.authentication import BaseAuthentication
-from rest_framework.permissions import BasePermission
 
-
-def _get_token() -> str:
-    return getattr(settings, "MESSAGING_GATEWAY_TOKEN", "")
+from apps.core.auth import BearerTokenPermission
 
 
 class GatewayBearerAuthentication(BaseAuthentication):
@@ -30,22 +24,12 @@ class GatewayBearerAuthentication(BaseAuthentication):
         return "Bearer"
 
 
-class HasGatewayToken(BasePermission):
+class HasGatewayToken(BearerTokenPermission):
     """Bearer token gate for the messaging gateway endpoints.
 
     Returns False (→ 503) if MESSAGING_GATEWAY_TOKEN is unset.
     Returns False (→ 401) if the header is absent or wrong.
     """
 
-    def has_permission(self, request, view) -> bool:
-        expected = _get_token()
-        if not expected:
-            request._gateway_token_unconfigured = True
-            return False
-
-        auth_header = request.META.get("HTTP_AUTHORIZATION", "")
-        if not auth_header.lower().startswith("bearer "):
-            return False
-
-        provided = auth_header[len("bearer "):].strip()
-        return hmac.compare_digest(provided.encode(), expected.encode())
+    settings_attr = "MESSAGING_GATEWAY_TOKEN"
+    unconfigured_flag = "_gateway_token_unconfigured"

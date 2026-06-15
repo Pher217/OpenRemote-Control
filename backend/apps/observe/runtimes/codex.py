@@ -6,7 +6,7 @@ Locates ``*.jsonl`` transcript files under ``~/.codex/sessions`` and parses
 import json
 import os
 
-from apps.observe.runtimes import register_runtime_adapter
+from apps.observe.runtimes import JsonlScanMixin, _cwd_to_repo, register_runtime_adapter
 
 _USER_EVENTS = {"user_message"}
 _ASSISTANT_EVENTS = {"agent_message"}
@@ -14,7 +14,7 @@ _CONVERSATIONAL_EVENTS = _USER_EVENTS | _ASSISTANT_EVENTS
 
 
 @register_runtime_adapter
-class CodexAdapter:
+class CodexAdapter(JsonlScanMixin):
     provider = "codex"
     source_kind = "file"
     default_root_env = "OBSERVE_CODEX_SESSIONS_DIR"
@@ -69,7 +69,7 @@ class CodexAdapter:
                 meta["session_id"] = session_id
             cwd = payload.get("cwd")
             if isinstance(cwd, str):
-                meta["repo"] = cwd.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+                meta["repo"] = _cwd_to_repo(cwd)
             git = payload.get("git")
             if isinstance(git, dict):
                 branch = git.get("branch")
@@ -79,19 +79,6 @@ class CodexAdapter:
         elif outer_type == "turn_context" and isinstance(payload, dict):
             cwd = payload.get("cwd")
             if isinstance(cwd, str):
-                meta["repo"] = cwd.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+                meta["repo"] = _cwd_to_repo(cwd)
 
         return meta
-
-    def scan_file_meta(self, path: str) -> dict:
-        merged: dict = {}
-        try:
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    m = self.extract_session_meta(line)
-                    m.pop("session_id", None)
-                    if m:
-                        merged.update(m)
-        except OSError:
-            return {}
-        return merged

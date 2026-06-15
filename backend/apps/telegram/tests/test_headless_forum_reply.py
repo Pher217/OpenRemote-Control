@@ -9,7 +9,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from channels.db import database_sync_to_async
@@ -18,7 +18,6 @@ from apps.accounts.models import Account
 from apps.hosts.models import Host
 from apps.telegram.service import _list_drivable_topics, handle_forum_reply
 from apps.threads.models import Thread
-
 
 # ---------------------------------------------------------------------------
 # Helpers

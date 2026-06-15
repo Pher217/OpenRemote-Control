@@ -73,6 +73,7 @@ class Thread(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["runtime"]),
             models.Index(fields=["host"]),
+            models.Index(fields=["external_session_ref"]),
         ]
 
     def __str__(self) -> str:

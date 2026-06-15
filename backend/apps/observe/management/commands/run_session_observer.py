@@ -4,6 +4,7 @@ Long-running asyncio loop that tails runtime session files, parses new turns,
 deduplicates them, and forwards each turn to the active messaging recipient.
 """
 import asyncio
+import logging
 import time
 from pathlib import Path
 
@@ -16,6 +17,12 @@ from apps.observe.observer import (
     select_session_files,
 )
 from apps.observe.runtimes import get_runtime_adapter, iter_runtime_files
+
+log = logging.getLogger(__name__)
+
+# Backoff: sleep this many seconds after N consecutive failures.
+_BACKOFF_THRESHOLD = 5
+_BACKOFF_SLEEP = 30
 
 
 def _resolve_runtimes() -> list[str]:
@@ -67,11 +74,14 @@ class Command(BaseCommand):
         # the original single-runtime behaviour — dedup is by uuid within a provider.
         offsets: dict[tuple[str, Path], int] = {}
         seen: dict[str, set] = {rt: set() for rt in runtimes}
+        # Maximum UUIDs retained per runtime to keep the dedup set bounded.
+        _seen_max = 5000
         # Per-file remembered session id (for runtimes whose turn lines lack one).
         file_states: dict[tuple[str, Path], dict] = {}
         # Per-DB poll state for sqlite-based adapters (tracks last_msg_id, etc.).
         sqlite_states: dict[tuple[str, Path], dict] = {}
         last_selected: dict[str, int | None] = dict.fromkeys(runtimes)
+        consecutive_errors = 0
 
         async def on_turn(thread, p, msg):
             if routing.active_recipient():
@@ -126,6 +136,22 @@ class Command(BaseCommand):
                                 provider=provider,
                                 file_state=file_states.setdefault(key, {}),
                             )
-            except Exception as exc:  # noqa: BLE001
-                self.stderr.write(f"observer scan error: {exc}")
+                            # Cap the dedup set to avoid unbounded growth.
+                            if len(seen[provider]) > _seen_max:
+                                # Discard oldest half; set has no order so we
+                                # convert to list and keep the second half.
+                                s = list(seen[provider])
+                                seen[provider] = set(s[len(s) // 2 :])
+            except Exception:  # noqa: BLE001
+                consecutive_errors += 1
+                log.exception("observer scan error (consecutive=%d)", consecutive_errors)
+                if consecutive_errors >= _BACKOFF_THRESHOLD:
+                    self.stderr.write(
+                        f"observer: {consecutive_errors} consecutive errors — "
+                        f"backing off {_BACKOFF_SLEEP}s"
+                    )
+                    await asyncio.sleep(_BACKOFF_SLEEP)
+                    continue
+            else:
+                consecutive_errors = 0
             await asyncio.sleep(2)

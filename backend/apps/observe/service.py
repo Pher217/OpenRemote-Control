@@ -5,7 +5,6 @@ parsed transcript turns as thread messages.
 """
 from channels.db import database_sync_to_async
 from django.conf import settings
-from django.db.models import Max
 
 from apps.accounts.models import Account
 from apps.observe.runtimes import get_runtime_adapter
@@ -60,7 +59,11 @@ def apply_session_meta(thread, meta) -> bool:
 @database_sync_to_async
 def record_turn(thread, role, text) -> Message:
     nxt = (
-        Message.objects.filter(thread=thread).aggregate(m=Max("sequence"))["m"] or 0
+        Message.objects.filter(thread=thread)
+        .order_by("-sequence")
+        .values_list("sequence", flat=True)
+        .first()
+        or 0
     ) + 1
     return Message.objects.create(
         thread=thread,

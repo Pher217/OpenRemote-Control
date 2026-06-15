@@ -4,7 +4,7 @@ import pytest
 from channels.db import database_sync_to_async
 
 from apps.accounts.models import Account
-from apps.threads.dispatch import dispatch_text
+from apps.threads.dispatch import _build_history, dispatch_text
 from apps.threads.models import Message, Thread
 
 
@@ -125,3 +125,29 @@ async def test_dispatch_text_slash_stop_stops_thread():
         return Thread.objects.get(id=thread.id).status
 
     assert await _status() == Thread.StatusChoices.STOPPED
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_build_history_limits_to_max_history_messages():
+    thread = await _make_thread()
+
+    @database_sync_to_async
+    def _create_messages():
+        for i in range(1, 206):
+            Message.objects.create(
+                thread=thread,
+                role="user" if i % 2 else "assistant",
+                redacted_content=f"message {i}",
+                sequence=i,
+            )
+
+    await _create_messages()
+    history = await _build_history(thread)
+
+    assert len(history) == 200
+
+    numbers = [int(item["content"].split()[1]) for item in history]
+    assert numbers == sorted(numbers)
+    assert 1 not in numbers
+    assert 205 in numbers
