@@ -58,7 +58,6 @@ The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenR
 - A **deploy runbook** (docker-compose: Matrix homeserver + bridges + headscale; daemon on a second machine)
 - `orc run` — approval-gated remote terminal (PTY) streaming, building on the existing input-safety core
 - Per-connector keypair identity hardening (replacing the shared bearer token) before any multi-user use
-- The Next.js PWA frontend (scaffolded; not yet built)
 
 ## Why it's different
 
@@ -123,7 +122,7 @@ All free / OSS-friendly:
 
 - **Backend** — Django 5.1, DRF, Channels, Celery 5
 - **Data plane** — PostgreSQL 16, Valkey 8, append-only audit log
-- **Surfaces** — Telegram, Matrix (→ WhatsApp/Slack/Signal via bridges), MCP; Next.js 15 + Tailwind + shadcn/ui PWA planned
+- **Surfaces** — Telegram; WhatsApp / Slack / Discord / Signal / iMessage via the messaging-gateway connector; MCP bridge for coding agents
 - **Host side** — Python 3.13 daemon, age-encrypted credential vault, ntfy push, faster-whisper voice, Tailscale / headscale connectivity
 - **Ops** — Docker Compose (dev), Caddy 2, OpenTelemetry → Loki + Tempo + Prometheus + Grafana
 
