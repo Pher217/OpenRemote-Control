@@ -120,6 +120,10 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             await self._handle_pty_end(content.get("data", {}))
         elif msg_type == "session.pty_reconcile":
             await self._handle_pty_reconcile(content.get("data", {}))
+        elif msg_type == "session.headless_start":
+            await self._handle_headless_start(content.get("data", {}))
+        elif msg_type == "session.headless_reply":
+            await self._handle_headless_reply(content.get("data", {}))
         elif msg_type == "host_heartbeat":
             # Echo a ping back THROUGH the group path (group_send → Redis →
             # this consumer's host_command → ws). This exercises the exact
@@ -262,6 +266,88 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             ).update(status=Thread.StatusChoices.COMPLETED)
 
         await database_sync_to_async(_reconcile)()
+
+    # ------------------------------------------------------------------
+    # Headless Claude frame handlers
+    # ------------------------------------------------------------------
+
+    async def _handle_headless_start(self, data: dict):
+        session_name = data.get("session_name", "")
+        claude_session_id = data.get("claude_session_id", "")
+        cwd = data.get("cwd", "")
+        if not session_name or not claude_session_id:
+            return
+
+        def _get_or_create():
+            from apps.accounts.models import Account  # noqa: PLC0415
+
+            account, _ = Account.objects.get_or_create(
+                provider="pty",
+                label="orc-run",
+                defaults={"auth_type": "none", "credential_type": "none"},
+            )
+            thread, created = Thread.objects.get_or_create(
+                external_session_ref=session_name,
+                defaults={
+                    "name": f"headless: {session_name}",
+                    "runtime": "pty",
+                    "runtime_mode": Thread.RuntimeModeChoices.PTY,
+                    "host": self.host,
+                    "account": account,
+                    "status": Thread.StatusChoices.RUNNING,
+                    "started_at": timezone.now(),
+                    "metadata": {
+                        "headless": True,
+                        "claude_session_id": claude_session_id,
+                        "cwd": cwd,
+                        "tmux_session_name": None,
+                    },
+                },
+            )
+            if not created:
+                md = dict(thread.metadata or {})
+                md["headless"] = True
+                md["claude_session_id"] = claude_session_id
+                md["cwd"] = cwd
+                md.setdefault("tmux_session_name", None)
+                thread.metadata = md
+                if thread.host_id != self.host.id:
+                    thread.host = self.host
+                thread.save(update_fields=["metadata", "host"])
+            return thread
+
+        thread = await database_sync_to_async(_get_or_create)()
+        await self._deliver_to_telegram(
+            thread,
+            {
+                "role": "assistant",
+                "text": "🤖 Headless Claude session ready — reply in this topic to send a prompt.",
+                "session_id": session_name,
+            },
+        )
+
+    async def _handle_headless_reply(self, data: dict):
+        thread_id = data.get("thread_id", "")
+        text = data.get("text", "")
+        if not thread_id or not text:
+            return
+
+        try:
+            thread = await database_sync_to_async(Thread.objects.get)(id=thread_id)
+        except Thread.DoesNotExist:
+            return
+
+        await record_turn(thread, "assistant", text)
+        await self._deliver_to_telegram(
+            thread, {"role": "assistant", "text": text, "session_id": str(thread.id)}
+        )
+
+        def _mark_started():
+            md = dict(thread.metadata or {})
+            md["claude_session_started"] = True
+            Thread.objects.filter(id=thread.id).update(metadata=md)
+
+        await database_sync_to_async(_mark_started)()
 
     def _get_or_create_pty_thread(self, session_name: str, command: str, cwd: str):
         """Synchronous helper — must be called via database_sync_to_async."""

@@ -48,6 +48,45 @@ def _cmd_run(args: argparse.Namespace) -> None:
     cmd_run(args)
 
 
+def _cmd_headless(args: argparse.Namespace) -> None:
+    import asyncio
+    import json
+    import sys
+    import uuid
+
+    import websockets
+
+    from agent_host.config import load
+    from agent_host.wsclient import connect_url
+
+    cfg = load()
+    if cfg is None:
+        print(
+            "Error: no config found. Run 'orc-host enroll' first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    claude_session_id = str(uuid.uuid4())
+    cwd = args.cwd or __import__("os").path.expanduser("~")
+
+    async def _register() -> None:
+        url = connect_url(cfg.backend_url, cfg)
+        async with websockets.connect(url) as ws:
+            await ws.send(json.dumps({
+                "type": "session.headless_start",
+                "data": {
+                    "session_name": args.name,
+                    "cwd": cwd,
+                    "claude_session_id": claude_session_id,
+                },
+            }))
+
+    asyncio.run(_register())
+    print(f"claude_session_id: {claude_session_id}")
+    print(f"session_name:      {args.name}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="orc-host",
@@ -84,6 +123,14 @@ def main() -> None:
     run_p.add_argument("--name", default=None, help="Session name (auto-generated if omitted)")
     run_p.add_argument("--cwd", default=None, help="Working directory for the PTY session")
 
+    # --- headless ---
+    headless_p = sub.add_parser(
+        "headless",
+        help="Register a headless Claude session with the backend and print its ID",
+    )
+    headless_p.add_argument("--name", required=True, help="Session name")
+    headless_p.add_argument("--cwd", default=None, help="Working directory for Claude")
+
     args = parser.parse_args()
 
     if args.subcommand == "enroll":
@@ -92,6 +139,8 @@ def main() -> None:
         _cmd_daemon(args)
     elif args.subcommand == "run":
         _cmd_run(args)
+    elif args.subcommand == "headless":
+        _cmd_headless(args)
 
 
 if __name__ == "__main__":
