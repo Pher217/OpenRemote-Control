@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import agent_host.wsclient as wsclient
 from agent_host.config import HostConfig
 from agent_host.queue import OfflineQueue
 from agent_host.signing import sign
@@ -508,3 +509,125 @@ def test_handle_host_command_pty_inject_does_not_raise():
     """
     frame = {"type": "host_command", "command": "pty.inject", "keys": "ls\n"}
     handle_host_command(frame)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat + watchdog durability tests
+# ---------------------------------------------------------------------------
+
+class _SilentWs:
+    """Fake WebSocket that returns silently-ignored frames quickly."""
+
+    def __init__(self, recv_delay: float = 0.01) -> None:
+        self.sent: list[dict] = []
+        self._recv_delay = recv_delay
+
+    async def send(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def recv(self) -> str:
+        await asyncio.sleep(self._recv_delay)
+        return json.dumps({"type": "ignored"})
+
+
+class _PingingWs:
+    """Fake WebSocket that returns host_command ping frames periodically."""
+
+    def __init__(self, interval: float = 0.05) -> None:
+        self.sent: list[dict] = []
+        self._interval = interval
+
+    async def send(self, data: str) -> None:
+        self.sent.append(json.loads(data))
+
+    async def recv(self) -> str:
+        await asyncio.sleep(self._interval)
+        return json.dumps({"type": "host_command", "command": "ping"})
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_sent_periodically(tmp_path, monkeypatch):
+    """
+    GIVEN a fake ws and a short monkeypatched HEARTBEAT_INTERVAL
+    WHEN run_sender() is running
+    THEN at least one {"type":"host_heartbeat"} frame is sent within a bounded wait.
+    """
+    monkeypatch.setattr(wsclient, "HEARTBEAT_INTERVAL", 0.05)
+
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    fake_ws = _FakeWs()
+
+    async def _wait_for_heartbeat() -> None:
+        for _ in range(200):  # up to ~2 s
+            await asyncio.sleep(0.01)
+            if any(ev.get("type") == "host_heartbeat" for ev in fake_ws.sent):
+                stop.set()
+                return
+        raise AssertionError("heartbeat not sent within bounded wait")
+
+    await asyncio.gather(
+        run_sender(cfg, queue, connect=_cm_connect([fake_ws]), stop=stop),
+        _wait_for_heartbeat(),
+    )
+
+    assert any(ev.get("type") == "host_heartbeat" for ev in fake_ws.sent)
+
+
+@pytest.mark.asyncio
+async def test_ping_resets_liveness_no_reconnect(tmp_path, monkeypatch):
+    """
+    GIVEN a daemon receiving periodic ping host_commands
+    WHEN the time since last ping never exceeds HEARTBEAT_TIMEOUT
+    THEN the connection is NOT torn down by the watchdog (no reconnect).
+    """
+    monkeypatch.setattr(wsclient, "HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr(wsclient, "HEARTBEAT_TIMEOUT", 0.3)
+
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    urls: list[str] = []
+
+    pinging_ws = _PingingWs(interval=0.05)
+    connect = _cm_connect([pinging_ws], urls=urls)
+
+    async def _stop_after() -> None:
+        await asyncio.sleep(0.5)
+        stop.set()
+
+    await asyncio.gather(
+        run_sender(cfg, queue, connect=connect, stop=stop),
+        _stop_after(),
+    )
+
+    assert len(urls) == 1
+
+
+@pytest.mark.asyncio
+async def test_watchdog_forces_reconnect_on_silence(tmp_path, monkeypatch):
+    """
+    GIVEN a connection with NO ping frames returned and a short HEARTBEAT_TIMEOUT
+    WHEN the watchdog detects silence
+    THEN the connection is torn down and the outer loop reconnects.
+    """
+    monkeypatch.setattr(wsclient, "HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr(wsclient, "HEARTBEAT_TIMEOUT", 0.2)
+
+    queue = OfflineQueue(tmp_path / "queue.jsonl")
+    cfg = HostConfig(backend_url="http://localhost", host_id="h1", token="tok")
+    stop = asyncio.Event()
+    urls: list[str] = []
+
+    silent_ws = _SilentWs(recv_delay=0.01)
+    connect = _cm_connect(
+        [silent_ws, silent_ws],
+        stop_event=stop,
+        stop_at_attempt=2,
+        urls=urls,
+    )
+
+    await run_sender(cfg, queue, connect=connect, stop=stop)
+
+    assert len(urls) >= 2

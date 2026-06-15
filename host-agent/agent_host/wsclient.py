@@ -39,6 +39,14 @@ log = logging.getLogger(__name__)
 # and would poison the offline queue indefinitely if retried.
 MAX_EVENT_BYTES = 1_000_000
 
+# Heartbeat: the daemon sends a host_heartbeat up to the backend every
+# HEARTBEAT_INTERVAL seconds; the backend echoes a `ping` host_command back
+# through the channel-layer group. If no ping returns within HEARTBEAT_TIMEOUT
+# seconds, the channel path is presumed dead and the connection is torn down so
+# the outer loop reconnects with a fresh backend consumer.
+HEARTBEAT_INTERVAL = 30.0
+HEARTBEAT_TIMEOUT = 90.0
+
 
 def connect_url(backend_url: str, cfg: HostConfig) -> str:
     """Build a signed WebSocket URL for the given config.
@@ -422,6 +430,8 @@ async def run_sender(
                 # it to disk.  The next connection drains that queue first.
                 # ------------------------------------------------------------------
 
+                last_pong = [time.monotonic()]
+
                 async def _sender() -> None:
                     while not stop.is_set():
                         try:
@@ -451,13 +461,38 @@ async def run_sender(
                         if not isinstance(frame, dict):
                             continue
                         if frame.get("type") == "host_command":
+                            if frame.get("command") == "ping":
+                                last_pong[0] = time.monotonic()
                             try:
                                 on_command(frame)
                             except Exception:
                                 log.exception("on_command raised — ignoring")
                         # All other types are silently ignored.
 
-                await asyncio.gather(_sender(), _receiver())
+                async def _heartbeat() -> None:
+                    while not stop.is_set():
+                        await asyncio.sleep(HEARTBEAT_INTERVAL)
+                        if stop.is_set():
+                            return
+                        try:
+                            await ws.send(json.dumps({"type": "host_heartbeat", "nonce": uuid.uuid4().hex}))
+                        except Exception:
+                            # Send failed — propagate so gather tears down and reconnects.
+                            raise
+
+                async def _watchdog() -> None:
+                    while not stop.is_set():
+                        await asyncio.sleep(HEARTBEAT_INTERVAL / 2)
+                        if stop.is_set():
+                            return
+                        if time.monotonic() - last_pong[0] > HEARTBEAT_TIMEOUT:
+                            log.warning(
+                                "heartbeat timeout (%.0fs) — channel path presumed dead; reconnecting",
+                                HEARTBEAT_TIMEOUT,
+                            )
+                            raise ConnectionError("heartbeat timeout")
+
+                await asyncio.gather(_sender(), _receiver(), _heartbeat(), _watchdog())
 
                 if stop.is_set():
                     return

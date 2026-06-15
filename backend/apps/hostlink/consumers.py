@@ -112,6 +112,15 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             await self._handle_pty_output(content.get("data", {}))
         elif msg_type == "session.pty_end":
             await self._handle_pty_end(content.get("data", {}))
+        elif msg_type == "host_heartbeat":
+            # Echo a ping back THROUGH the group path (group_send → Redis →
+            # this consumer's host_command → ws). This exercises the exact
+            # delivery path used by pty.inject, so the daemon's watchdog can
+            # detect a silently-stalled channel receive and force a reconnect.
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "host_command", "command": "ping", "nonce": content.get("nonce", "")},
+            )
         # Unknown message types are silently ignored.
 
     async def _handle_session_event(self, data: dict):
