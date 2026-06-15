@@ -92,6 +92,30 @@ def _lookup_thread_for_topic(forum_chat_id: int, message_thread_id: int):
     )
 
 
+def _topic_link(forum_chat_id: int, topic_id: int) -> str:
+    """Telegram supergroup topic deep-link. Strip the -100 supergroup prefix."""
+    internal = str(forum_chat_id).removeprefix("-100")
+    return f"https://t.me/c/{internal}/{topic_id}"
+
+
+@database_sync_to_async
+def _list_drivable_topics(forum_chat_id: int) -> list[tuple[str, int]]:
+    """Return (name, topic_id) pairs for live driveable PTY sessions in this forum."""
+    out = []
+    qs = Thread.objects.filter(
+        runtime_mode=Thread.RuntimeModeChoices.PTY,
+        status=Thread.StatusChoices.RUNNING,
+        host_id__isnull=False,
+        metadata__telegram_forum_chat_id=forum_chat_id,
+    )
+    for t in qs:
+        m = t.metadata or {}
+        tid = m.get("telegram_topic_id")
+        if tid and m.get("tmux_session_name"):
+            out.append((t.name, int(tid)))
+    return out
+
+
 @database_sync_to_async
 def _resolve_host(host_arg: str):
     """Resolve a host by slug or name (case-insensitive). Returns Host or None."""
@@ -255,11 +279,22 @@ async def handle_forum_reply(
     has_tmux = bool(thread.metadata.get("tmux_session_name"))
 
     if not (is_pty and has_host and has_tmux):
-        await send(
-            forum_chat_id,
-            "This session is read-only — start it with `orc run` to send input.",
-            message_thread_id=message_thread_id,
-        )
+        drivable = await _list_drivable_topics(configured_forum_id)
+        if drivable:
+            lines = "\n".join(
+                f"• {name}: {_topic_link(configured_forum_id, tid)}"
+                for name, tid in drivable
+            )
+            body = (
+                "This topic mirrors a read-only session, so input can't be sent here.\n\n"
+                "Reply in one of your live sessions instead:\n" + lines
+            )
+        else:
+            body = (
+                "This session is read-only, and there's no live `orc run` session right now. "
+                "Start one with `orc run` to send input."
+            )
+        await send(forum_chat_id, body, message_thread_id=message_thread_id)
         return
 
     # --- Driveable PTY session -----------------------------------------------

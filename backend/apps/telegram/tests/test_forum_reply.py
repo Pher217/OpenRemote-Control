@@ -412,3 +412,84 @@ async def test_forum_reply_without_auto_approve_still_creates_approval_prompt(se
     # The approval request was delivered to Telegram
     assert len(send_calls) == 1
     assert "inject" in send_calls[0]["text"].lower()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_forum_reply_read_only_with_driveable_session_lists_topic_link(settings):
+    """
+    GIVEN an allowed user replies in a read-only (OBSERVED) topic
+    WHEN  a driveable PTY session with a telegram_topic_id exists in the same forum
+    THEN  the bounce message contains the t.me/c/... deep-link to that session
+          and does NOT inject.
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
+    settings.TELEGRAM_FORUM_CHAT_ID = "-100999"
+
+    account = await database_sync_to_async(_make_account)("dl1")
+    host = await database_sync_to_async(_make_host)("host-dl1")
+
+    # Read-only observed thread (the topic the user is replying in)
+    await database_sync_to_async(_make_thread)(
+        account,
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        topic_id=10,
+        forum_chat_id=-100999,
+    )
+
+    # Driveable PTY thread with a topic id in the same forum
+    await database_sync_to_async(
+        lambda: Thread.objects.create(
+            name="live-pty-session",
+            runtime="claude_code",
+            runtime_mode=Thread.RuntimeModeChoices.PTY,
+            status=Thread.StatusChoices.RUNNING,
+            account=account,
+            host=host,
+            metadata={
+                "telegram_topic_id": 20,
+                "telegram_forum_chat_id": -100999,
+                "tmux_session_name": "orc-abc123",
+            },
+        )
+    )()
+
+    send, calls = await _make_send()
+    await handle_forum_reply(-100999, 10, 111, "hello", send=send)
+
+    assert len(calls) == 1
+    assert calls[0]["message_thread_id"] == 10
+    # Must contain the deep-link to the driveable topic
+    assert "t.me/c/999/20" in calls[0]["text"]
+    # Must say "read-only" somewhere
+    assert "read-only" in calls[0]["text"].lower()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_forum_reply_read_only_no_driveable_session_fallback_message(settings):
+    """
+    GIVEN an allowed user replies in a read-only topic
+    WHEN  no driveable PTY session exists in the forum
+    THEN  the fallback "Start one with `orc run`" message is sent.
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
+    settings.TELEGRAM_FORUM_CHAT_ID = "-100888"
+
+    account = await database_sync_to_async(_make_account)("fb1")
+
+    # Only a read-only observed thread — no driveable session
+    await database_sync_to_async(_make_thread)(
+        account,
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        topic_id=11,
+        forum_chat_id=-100888,
+    )
+
+    send, calls = await _make_send()
+    await handle_forum_reply(-100888, 11, 111, "hello", send=send)
+
+    assert len(calls) == 1
+    assert calls[0]["message_thread_id"] == 11
+    assert "orc run" in calls[0]["text"]
+    assert "read-only" in calls[0]["text"].lower()
