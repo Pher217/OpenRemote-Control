@@ -35,6 +35,10 @@ from agent_host.signing import sign
 
 log = logging.getLogger(__name__)
 
+# Per-claude-session serialization locks for headless.prompt so two prompts to
+# the same session cannot overlap (dict is module-level; lock created on first use).
+_headless_locks: dict[str, asyncio.Lock] = {}
+
 # Events whose JSON encoding exceeds this byte threshold are dropped rather than
 # sent — a single oversized frame will cause the server to close the connection
 # and would poison the offline queue indefinitely if retried.
@@ -240,6 +244,64 @@ def handle_host_command(
             _session_start_task_factory(_start_and_stream())
         else:
             loop.create_task(_start_and_stream())
+    elif command == "headless.prompt":
+        # Headless Claude relay: run `claude -p` and reply with the result.
+        # Blocks up to minutes — must NOT run inline.  Offload to the event
+        # loop using the same pattern as session.start above.
+        claude_session_id = frame.get("claude_session_id", "")
+        text = frame.get("text", "")
+        cwd = frame.get("cwd") or ""
+        started = bool(frame.get("started", False))
+        thread_id = frame.get("thread_id", "")
+
+        if not claude_session_id or not text:
+            log.warning(
+                "host_command: headless.prompt missing claude_session_id or text — ignoring"
+            )
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            log.error(
+                "host_command: headless.prompt called outside running event loop — ignoring"
+            )
+            return
+
+        async def _run_headless_prompt() -> None:
+            # Serialize per claude_session_id — create lock on first use.
+            if claude_session_id not in _headless_locks:
+                _headless_locks[claude_session_id] = asyncio.Lock()
+            lock = _headless_locks[claude_session_id]
+
+            async with lock:
+                from agent_host.claude_headless import run_headless  # noqa: PLC0415
+
+                result = await asyncio.to_thread(
+                    run_headless, text, claude_session_id, cwd, started
+                )
+
+            if incoming_queue is not None:
+                try:
+                    incoming_queue.put_nowait({
+                        "type": "session.headless_reply",
+                        "data": {
+                            "thread_id": thread_id,
+                            "text": result["text"],
+                            "is_error": result["is_error"],
+                        },
+                    })
+                except Exception:
+                    log.exception(
+                        "host_command: headless.prompt failed to enqueue reply for thread %r",
+                        thread_id,
+                    )
+            else:
+                log.warning(
+                    "host_command: headless.prompt: no incoming_queue — reply will not be sent"
+                )
+
+        loop.create_task(_run_headless_prompt())
     else:
         log.warning("host_command: unknown command %r — ignoring", command)
 
