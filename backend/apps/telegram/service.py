@@ -253,6 +253,28 @@ async def handle_forum_reply(
         return
 
     # --- Driveable PTY session -----------------------------------------------
+    # Auto-approve mode: when this session is marked trusted (metadata
+    # auto_approve=True), inject directly without a per-message Allow tap.
+    # DANGEROUS input is still blocked at the host send_keys layer
+    # (input_policy.classify_input), so this skips the human tap, NOT the
+    # dangerous-input guard. Identity is already gated above (from.id allowlist).
+    if (thread.metadata or {}).get("auto_approve") is True:
+
+        @database_sync_to_async
+        def _fetch_with_host():
+            from apps.threads.models import Thread as _T  # noqa: PLC0415
+
+            return _T.objects.select_related("host").get(id=thread.id)
+
+        t_h = await _fetch_with_host()
+        from apps.hostlink.service import async_send_pty_input  # noqa: PLC0415
+
+        try:
+            await async_send_pty_input(t_h, text, approved=True)
+        except Exception:
+            log.exception("auto_approve inject failed for thread %s", thread.id)
+        return
+
     # Phase 5: create an APPROVAL Prompt whose payload binds the exact text to
     # inject.  The text is stored in surface_message_ref["inject_text"] — the
     # source of truth for what will be injected if approved.  The raw Telegram
