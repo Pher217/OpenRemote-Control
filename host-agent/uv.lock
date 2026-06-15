@@ -491,7 +491,7 @@ windows = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.7" },
+    { name = "bandit", extras = ["toml"], marker = "extra == 'dev'", specifier = ">=1.9,<2" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.6" },
     { name = "cryptography", specifier = ">=43.0" },
     { name = "gitpython", specifier = ">=3.1" },
@@ -504,7 +504,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pywinpty", marker = "extra == 'windows'", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<0.16" },
     { name = "structlog", specifier = ">=24.4" },
     { name = "watchdog", specifier = ">=5.0" },
     { name = "websockets", specifier = ">=13.0" },
