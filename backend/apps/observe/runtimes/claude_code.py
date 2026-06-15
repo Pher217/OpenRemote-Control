@@ -6,11 +6,11 @@ user/assistant JSONL records into normalized conversation turns (role/text/uuid/
 import json
 import os
 
-from apps.observe.runtimes import register_runtime_adapter
+from apps.observe.runtimes import JsonlScanMixin, _cwd_to_repo, register_runtime_adapter
 
 
 @register_runtime_adapter
-class ClaudeCodeAdapter:
+class ClaudeCodeAdapter(JsonlScanMixin):
     provider = "claude_code"
     source_kind = "file"
     default_root_env = "OBSERVE_CLAUDE_PROJECTS_DIR"
@@ -71,7 +71,7 @@ class ClaudeCodeAdapter:
         if isinstance(cwd, str):
             # Cross-platform basename: split on both separators so a Windows cwd
             # (c:\Users\...\repo) yields the repo name when observed on macOS/Linux too.
-            meta["repo"] = cwd.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            meta["repo"] = _cwd_to_repo(cwd)
         branch = obj.get("gitBranch")
         if isinstance(branch, str):
             meta["branch"] = branch
@@ -81,15 +81,3 @@ class ClaudeCodeAdapter:
                 meta["title"] = title
         return meta
 
-    def scan_file_meta(self, path: str) -> dict:
-        merged: dict = {}
-        try:
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    m = self.extract_session_meta(line)
-                    m.pop("session_id", None)
-                    if m:
-                        merged.update(m)
-        except OSError:
-            return {}
-        return merged

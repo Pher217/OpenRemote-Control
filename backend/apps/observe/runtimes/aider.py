@@ -5,7 +5,7 @@ user/assistant turns into normalized conversation records (role/text/uuid/sessio
 """
 import os
 
-from apps.observe.runtimes import register_runtime_adapter
+from apps.observe.runtimes import JsonlScanMixin, register_runtime_adapter
 
 # TODO-VERIFY: Aider Markdown chat-history format is loosely documented and
 # varies by version. The following constants isolate every assumption so they
@@ -30,7 +30,7 @@ AIDER_STRUCTURAL_PREFIXES = {"---", "***", "___", "```"}
 
 
 @register_runtime_adapter
-class AiderAdapter:
+class AiderAdapter(JsonlScanMixin):
     provider = "aider"
     source_kind = "file"
     default_root_env = "OBSERVE_AIDER_PROJECTS_DIR"
@@ -68,15 +68,3 @@ class AiderAdapter:
     def extract_session_meta(self, raw: str) -> dict:
         return {}
 
-    def scan_file_meta(self, path: str) -> dict:
-        merged: dict = {}
-        try:
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    m = self.extract_session_meta(line)
-                    m.pop("session_id", None)
-                    if m:
-                        merged.update(m)
-        except OSError:
-            return {}
-        return merged

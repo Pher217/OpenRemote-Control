@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 from django.conf import settings
 
+from apps.core.html import _esc
 from apps.threads.models import Thread
 
 # Terminal statuses — sessions in these states are excluded from the fleet view.
@@ -94,11 +95,6 @@ def _topic_link(thread: Thread) -> str | None:
     if abs_id.startswith("100"):
         abs_id = abs_id[3:]
     return f"https://t.me/c/{abs_id}/{topic_id}"
-
-
-def _esc(text: str) -> str:
-    """Minimal HTML escape for Telegram HTML parse mode."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _format_thread_line(thread: Thread, now: datetime) -> str:
