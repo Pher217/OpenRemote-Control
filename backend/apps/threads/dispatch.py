@@ -91,10 +91,12 @@ def _get_thread(thread_id):
 
 @database_sync_to_async
 def _persist_message(thread, role, text):
-    from django.db.models import Max
-
     nxt = (
-        Message.objects.filter(thread=thread).aggregate(m=Max("sequence"))["m"] or 0
+        Message.objects.filter(thread=thread)
+        .order_by("-sequence")
+        .values_list("sequence", flat=True)
+        .first()
+        or 0
     ) + 1
     return Message.objects.create(
         thread=thread, role=role, redacted_content=text, sequence=nxt
