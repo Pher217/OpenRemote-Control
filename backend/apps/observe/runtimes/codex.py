@@ -82,4 +82,3 @@ class CodexAdapter(JsonlScanMixin):
                 meta["repo"] = _cwd_to_repo(cwd)
 
         return meta
-

@@ -11,7 +11,6 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from apps.hostlink import consumers
 from apps.hostlink.consumers import HostDaemonConsumer
 from apps.hosts.models import Host
 from apps.threads.models import Thread

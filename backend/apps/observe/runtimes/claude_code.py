@@ -80,4 +80,3 @@ class ClaudeCodeAdapter(JsonlScanMixin):
             if isinstance(title, str):
                 meta["title"] = title
         return meta
-

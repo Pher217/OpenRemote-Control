@@ -67,4 +67,3 @@ class AiderAdapter(JsonlScanMixin):
 
     def extract_session_meta(self, raw: str) -> dict:
         return {}
-

@@ -127,4 +127,3 @@ class GeminiAdapter(JsonlScanMixin):
             meta["title"] = title
 
         return meta
-
