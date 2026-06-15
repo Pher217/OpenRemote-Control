@@ -1,3 +1,8 @@
+"""Observe orchestration and persistence layer.
+
+Manages observed thread creation, session metadata updates, and persisting
+parsed transcript turns as thread messages.
+"""
 from channels.db import database_sync_to_async
 from django.conf import settings
 from django.db.models import Max

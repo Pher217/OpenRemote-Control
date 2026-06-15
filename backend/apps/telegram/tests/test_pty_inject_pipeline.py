@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from django.test import override_settings
@@ -128,8 +127,8 @@ async def test_deny_does_not_inject(settings):
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
     settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
 
-    from apps.telegram.service import handle_callback_query, handle_forum_reply
     from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_callback_query, handle_forum_reply
 
     account = await database_sync_to_async(_make_account)("deny1")
     host = await database_sync_to_async(_make_host)("deny-host-1")
@@ -174,7 +173,7 @@ async def test_deny_does_not_inject(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.15)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     result = await _try_receive()
@@ -204,8 +203,8 @@ async def test_allow_injects_exact_stored_text(settings):
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
     settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
 
-    from apps.telegram.service import handle_callback_query, handle_forum_reply
     from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_callback_query, handle_forum_reply
 
     account = await database_sync_to_async(_make_account)("allow1")
     host = await database_sync_to_async(_make_host)("allow-host-1")
@@ -249,7 +248,7 @@ async def test_allow_injects_exact_stored_text(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.3)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     frame = await _try_receive()
@@ -281,8 +280,8 @@ async def test_observed_thread_reply_does_not_create_approval_prompt(settings):
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
 
-    from apps.telegram.service import handle_forum_reply
     from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_forum_reply
 
     account = await database_sync_to_async(_make_account)("obs-pi1")
     thread = await database_sync_to_async(_make_observed_thread)(
@@ -324,8 +323,8 @@ async def test_approval_anti_replay_injects_at_most_once(settings):
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
     settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
 
-    from apps.telegram.service import handle_callback_query, handle_forum_reply
     from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_callback_query, handle_forum_reply
 
     account = await database_sync_to_async(_make_account)("ar1")
     host = await database_sync_to_async(_make_host)("ar-host-1")
@@ -373,7 +372,7 @@ async def test_approval_anti_replay_injects_at_most_once(settings):
             try:
                 f = await asyncio.wait_for(cl.receive(ch), timeout=0.15)
                 frames.append(f)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 break
 
     await _drain()
@@ -410,8 +409,8 @@ async def test_non_allowlisted_approver_cannot_inject(settings):
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
     settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
 
-    from apps.telegram.service import handle_callback_query, handle_forum_reply
     from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_callback_query, handle_forum_reply
 
     account = await database_sync_to_async(_make_account)("unauth1")
     host = await database_sync_to_async(_make_host)("unauth-host-1")
@@ -446,7 +445,7 @@ async def test_non_allowlisted_approver_cannot_inject(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.15)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return None
 
     result = await _try_receive()
@@ -459,10 +458,9 @@ async def test_non_allowlisted_approver_cannot_inject(settings):
     # Prompt must still be PENDING (not consumed)
     @database_sync_to_async
     def _check_pending():
-        from apps.prompts.models import Prompt as P
+        from apps.prompts.models import Prompt
 
-        p = P.objects.get(pk=prompt.pk)
-        return p.status
+        return Prompt.objects.get(pk=prompt.pk).status
 
     status = await _check_pending()
     assert status == "pending", f"Prompt must remain PENDING after rejected auth, got {status!r}"
@@ -485,8 +483,8 @@ async def test_approval_prompt_stores_exact_reply_text(settings):
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
 
-    from apps.telegram.service import handle_forum_reply
     from apps.prompts.models import Prompt
+    from apps.telegram.service import handle_forum_reply
 
     account = await database_sync_to_async(_make_account)("bind1")
     host = await database_sync_to_async(_make_host)("bind-host-1")

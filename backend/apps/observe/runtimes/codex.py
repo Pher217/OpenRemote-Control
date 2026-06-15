@@ -1,3 +1,8 @@
+"""Codex runtime adapter.
+
+Locates ``*.jsonl`` transcript files under ``~/.codex/sessions`` and parses
+``event_msg`` payloads (``user_message`` / ``agent_message``) into normalized conversation turns (role/text/uuid/session_id).
+"""
 import json
 import os
 

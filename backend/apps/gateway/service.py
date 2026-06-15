@@ -1,3 +1,8 @@
+"""Inbound message handling and outbox delivery service for the gateway app.
+
+Routes inbound messages into threads, enqueues outbound replies into the
+gateway outbox, and lets the messaging connector sidecar claim them.
+"""
 import logging
 
 from asgiref.sync import async_to_sync
@@ -71,8 +76,8 @@ def handle_inbound(platform: str, chat_id: str, sender: str, text: str) -> str |
        (or "Expired/Invalid" when resolve returns None).
     4. If no pending prompt, dispatch_text and capture the assistant reply.
     """
-    from apps.prompts.render import parse_reply
     from apps.prompts.models import Prompt
+    from apps.prompts.render import parse_reply
     from apps.prompts.service import resolve as resolve_prompt
 
     try:

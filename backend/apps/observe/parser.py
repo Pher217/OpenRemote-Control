@@ -1,3 +1,8 @@
+"""Compatibility shim for the active runtime transcript adapter.
+
+Delegates line/turn parsing and session metadata extraction to the concrete
+adapter so the rest of the observe app can stay runtime-agnostic.
+"""
 from apps.observe.runtimes.claude_code import ClaudeCodeAdapter
 
 _ADAPTER = ClaudeCodeAdapter()

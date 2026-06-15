@@ -1,3 +1,8 @@
+"""Claude Code runtime adapter.
+
+Locates ``*.jsonl`` transcript files under ``~/.claude/projects`` and parses
+user/assistant JSONL records into normalized conversation turns (role/text/uuid/session_id).
+"""
 import json
 import os
 

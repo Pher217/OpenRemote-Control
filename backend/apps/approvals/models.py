@@ -1,3 +1,8 @@
+"""Approval request models.
+
+Defines ApprovalRequest, a gated action awaiting operator approval with
+risk classification, status tracking and signed nonce support.
+"""
 import uuid
 
 from django.db import models

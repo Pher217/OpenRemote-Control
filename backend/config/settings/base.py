@@ -36,7 +36,6 @@ INSTALLED_APPS = [
     "apps.projects",
     "apps.policies",
     "apps.threads",
-    "apps.adapters",
     "apps.tier2",
     "apps.approvals",
     "apps.audit",

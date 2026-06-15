@@ -14,8 +14,8 @@ import types
 import pytest
 
 from agent_host.config import HostConfig
-from agent_host.run_cmd import run_pty, strip_ansi
-
+from agent_host.pty_stream import strip_ansi
+from agent_host.run_cmd import run_pty
 
 # ---------------------------------------------------------------------------
 # strip_ansi tests

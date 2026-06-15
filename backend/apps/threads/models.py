@@ -1,3 +1,8 @@
+"""Thread primitive models: a single coding session/conversation.
+
+Defines `Thread` (runtime, runtime mode, status lifecycle, host/account/project
+links) and `Message` (roles, redacted and encrypted content, sequence order).
+"""
 import uuid
 
 from django.db import models

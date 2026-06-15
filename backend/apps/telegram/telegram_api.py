@@ -1,3 +1,8 @@
+"""Thin async HTTP client for the Telegram Bot API.
+
+Provides helpers to send/edit/pin messages, manage forum topics, answer
+callback queries, poll updates, and redact the bot token from logs.
+"""
 import httpx
 from django.conf import settings
 

@@ -13,12 +13,11 @@ Coverage:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from apps.supervisor.classifier import (
-    MAX_PUSH_PER_CYCLE,
     STALL_THRESHOLD,
     MajorStep,
     Severity,
@@ -31,7 +30,7 @@ from apps.supervisor.classifier import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-_NOW = datetime(2026, 6, 14, 12, 0, 0, tzinfo=timezone.utc)
+_NOW = datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC)
 _STALE_TS = _NOW - STALL_THRESHOLD  # exactly at threshold → stalled
 _FRESH_TS = _NOW - (STALL_THRESHOLD - timedelta(seconds=1))  # just under → NOT stalled
 

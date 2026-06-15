@@ -39,7 +39,7 @@ body:
         - backend
         - host-agent
         - orc-mcp connector
-        - frontend
+        - messaging-gateway connector
         - docs / deploy
         - not sure
     validations:

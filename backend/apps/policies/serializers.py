@@ -1,3 +1,7 @@
+"""DRF serializers for policy profiles, exposing all guardrail fields with
+read-only identifiers and timestamps.
+"""
+
 from rest_framework import serializers
 
 from apps.policies.models import PolicyProfile

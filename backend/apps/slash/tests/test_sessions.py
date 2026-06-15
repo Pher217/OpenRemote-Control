@@ -8,8 +8,8 @@ Coverage:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pytest
 from django.test import override_settings
@@ -22,7 +22,6 @@ from apps.slash.handlers.sessions import (
     render_fleet,
 )
 from apps.threads.models import Thread
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -48,7 +47,7 @@ def _make_thread(
     last_event_at: datetime | None = None,
     metadata: dict | None = None,
 ) -> Thread:
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     return Thread.objects.create(
         name=name,
         runtime="claude_code",
@@ -82,7 +81,7 @@ def _fake_thread(
     metadata: dict | None = None,
 ) -> MagicMock:
     """Build a MagicMock that quacks like a Thread for render_fleet."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     t = MagicMock(spec=Thread)
     t.runtime_mode = runtime_mode
     t.status = status
@@ -107,7 +106,7 @@ class TestRenderFleetEmpty:
         WHEN render_fleet is called with an empty list
         THEN the result is "No active sessions."
         """
-        result = render_fleet([], datetime.now(tz=timezone.utc))
+        result = render_fleet([], datetime.now(tz=UTC))
         assert result == "No active sessions."
 
 
@@ -118,7 +117,7 @@ class TestRenderFleetGrouping:
         WHEN render_fleet is called
         THEN the Needs input group appears before Working.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         waiting = _fake_thread(status=Thread.StatusChoices.WAITING_APPROVAL, name="waiting")
         running = _fake_thread(status=Thread.StatusChoices.RUNNING, name="running")
 
@@ -134,7 +133,7 @@ class TestRenderFleetGrouping:
         WHEN render_fleet is called
         THEN the thread appears under Needs input.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(status=Thread.StatusChoices.WAITING_APPROVAL, name="my-project")
         result = render_fleet([t], now)
 
@@ -148,7 +147,7 @@ class TestRenderFleetGrouping:
         WHEN render_fleet is called
         THEN the thread appears under Working.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(status=Thread.StatusChoices.RUNNING, name="work-proj")
         result = render_fleet([t], now)
 
@@ -162,7 +161,7 @@ class TestRenderFleetGrouping:
         WHEN render_fleet is called
         THEN the thread appears under Idle / other.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         # Use a mock status that doesn't match any group rules
         t = _fake_thread(status="other_active", name="idle-proj")
         result = render_fleet([t], now)
@@ -192,7 +191,7 @@ class TestRenderFleetBadges:
         WHEN render_fleet is called
         THEN the rendered line contains the correct badge text.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(runtime_mode=runtime_mode, status=Thread.StatusChoices.RUNNING)
         result = render_fleet([t], now)
         assert expected_badge in result
@@ -205,7 +204,7 @@ class TestRenderFleetAgeIdle:
         WHEN render_fleet is called
         THEN the age shows '30m'.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(
             status=Thread.StatusChoices.RUNNING,
             started_at=now - timedelta(minutes=30),
@@ -220,7 +219,7 @@ class TestRenderFleetAgeIdle:
         WHEN render_fleet is called
         THEN the age shows '2h 15m'.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(
             status=Thread.StatusChoices.RUNNING,
             started_at=now - timedelta(hours=2, minutes=15),
@@ -235,7 +234,7 @@ class TestRenderFleetAgeIdle:
         WHEN render_fleet is called
         THEN age is 45m and idle is 3m (both shown independently).
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(
             status=Thread.StatusChoices.RUNNING,
             started_at=now - timedelta(minutes=45),
@@ -251,7 +250,7 @@ class TestRenderFleetAgeIdle:
         WHEN render_fleet is called
         THEN age shows '?'.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(status=Thread.StatusChoices.RUNNING, started_at=now)
         t.started_at = None
         result = render_fleet([t], now)
@@ -265,7 +264,7 @@ class TestRenderFleetTopicLink:
         WHEN render_fleet is called
         THEN the rendered line contains an HTML anchor with the deep-link URL.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(
             status=Thread.StatusChoices.RUNNING,
             metadata={"telegram_topic_id": 42, "telegram_forum_chat_id": -1001234567890},
@@ -280,7 +279,7 @@ class TestRenderFleetTopicLink:
         WHEN render_fleet is called
         THEN no anchor tag is present for that thread.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(status=Thread.StatusChoices.RUNNING, metadata={})
         result = render_fleet([t], now)
         assert "https://t.me/c/" not in result
@@ -291,7 +290,7 @@ class TestRenderFleetTopicLink:
         WHEN render_fleet is called
         THEN the host name appears in the line.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(status=Thread.StatusChoices.RUNNING, host_name="my-mac")
         result = render_fleet([t], now)
         assert "my-mac" in result
@@ -302,7 +301,7 @@ class TestRenderFleetTopicLink:
         WHEN render_fleet is called
         THEN 'local' appears in the line.
         """
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.now(tz=UTC)
         t = _fake_thread(status=Thread.StatusChoices.RUNNING)  # host=None
         result = render_fleet([t], now)
         assert "local" in result

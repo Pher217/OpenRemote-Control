@@ -39,16 +39,6 @@ updates:
       - "dependencies"
       - "connectors"
 
-  # Frontend (Next.js) npm deps
-  - package-ecosystem: "npm"
-    directory: "/frontend"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "frontend"
-
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"

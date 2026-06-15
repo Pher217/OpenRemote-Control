@@ -1,3 +1,7 @@
+"""Policy profile definitions enforcing data sensitivity, runtime, provider,
+host and operational guardrails applied to projects and sessions.
+"""
+
 import uuid
 
 from django.db import models

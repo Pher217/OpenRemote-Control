@@ -1,3 +1,9 @@
+"""Authentication and permission classes for the connectors bridge.
+
+Supports ed25519 request-signature authentication per connector key plus a
+legacy shared bearer token fallback, and routes principal checks for the
+MCP chat-surface bridge.
+"""
 import hmac
 import time
 

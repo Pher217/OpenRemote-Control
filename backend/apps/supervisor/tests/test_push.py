@@ -14,11 +14,8 @@ Coverage:
 
 from __future__ import annotations
 
-import pytest
-
 from apps.supervisor.classifier import MAX_PUSH_PER_CYCLE, MajorStep, Severity, StepKind
 from apps.supervisor.push import coalesce, format_push
-
 
 # ---------------------------------------------------------------------------
 # Helpers

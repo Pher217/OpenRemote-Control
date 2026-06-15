@@ -1,3 +1,9 @@
+"""Database models for the messaging gateway connector.
+
+GatewayChat maps external platform chats to internal threads, and
+GatewayMessage stores outbound messages to be delivered by the Node sidecar.
+"""
+
 from django.db import models
 
 

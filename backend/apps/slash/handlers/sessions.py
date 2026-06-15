@@ -11,7 +11,7 @@ The Telegram send + dashboard refresh are done by the async caller (service.py).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from django.conf import settings
 
@@ -111,10 +111,7 @@ def _format_thread_line(thread: Thread, now: datetime) -> str:
     idle = _age_str(thread.last_event_at, now)
 
     link = _topic_link(thread)
-    if link:
-        title = f'<a href="{link}">{_esc(project)}</a>'
-    else:
-        title = f"<b>{_esc(project)}</b>"
+    title = f'<a href="{link}">{_esc(project)}</a>' if link else f"<b>{_esc(project)}</b>"
 
     return (
         f"• [{_esc(badge)}] {title} · {_esc(host)}"
@@ -198,6 +195,6 @@ def handle(thread: Thread, args: list[str], *, from_user_id: int | None = None) 
         return {"ok": False, "drop": True}
 
     threads = _active_threads()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     text = render_fleet(threads, now)
     return {"ok": True, "text": text, "refresh_dashboard": True}

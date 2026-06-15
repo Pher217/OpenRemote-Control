@@ -181,7 +181,7 @@ def test_send_pty_input_noop_for_observed_thread(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.1)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     result = async_to_sync(_try_receive)()
@@ -249,7 +249,7 @@ def test_send_pty_input_noop_for_pty_thread_without_tmux(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.1)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     result = async_to_sync(_try_receive)()

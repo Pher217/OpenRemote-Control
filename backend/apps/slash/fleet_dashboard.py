@@ -25,7 +25,8 @@ to avoid touching telegram_api.py when the wrapper might already exist).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import contextlib
+from datetime import UTC, datetime
 
 from django.conf import settings
 from django.core.cache import cache
@@ -39,10 +40,8 @@ _CACHE_TTL = 60 * 60 * 24 * 30
 
 async def _pin_message(api, chat_id: int, message_id: int) -> None:
     """Pin a message silently.  Swallows failures (e.g. bot not admin)."""
-    try:
+    with contextlib.suppress(Exception):
         await api.pin_chat_message(chat_id, message_id)
-    except Exception:  # noqa: BLE001
-        pass
 
 
 async def refresh_fleet_dashboard(
@@ -82,7 +81,7 @@ async def refresh_fleet_dashboard(
     from channels.db import database_sync_to_async
 
     threads = await database_sync_to_async(_active_threads)()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     text = render_fleet(threads, now)
 
     # Truncate to Telegram's 4096-char limit.

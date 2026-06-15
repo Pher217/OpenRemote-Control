@@ -1,3 +1,8 @@
+"""Deliver observed session turns to Telegram.
+
+Sends a session-start intro into a per-session Telegram forum topic, edits an
+in-place assistant digest, and recreates the topic when it has gone stale.
+"""
 import logging
 
 import httpx

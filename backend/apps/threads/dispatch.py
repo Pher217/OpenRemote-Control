@@ -1,3 +1,9 @@
+"""Inbound message dispatch for the Thread primitive.
+
+Routes text to slash commands or to the thread's tier2 provider adapter,
+persists messages, builds conversation history, and streams back deltas,
+completions, and errors.
+"""
 from channels.db import database_sync_to_async
 
 from apps.slash.handlers import get_handler

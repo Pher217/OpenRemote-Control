@@ -53,7 +53,7 @@ In scope:
 
 - The Django backend (`backend/`).
 - The host daemon (`host-agent/`).
-- The Next.js PWA frontend (`frontend/`).
+- The connectors (`connectors/orc-mcp/`, `connectors/messaging-gateway/`).
 - Authentication flows, session management, and credential storage.
 - Policy enforcement, approval workflows, and audit pipelines.
 - Runtime adapters and PTY supervision.

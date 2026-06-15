@@ -8,7 +8,7 @@ module so callers (digest, tests) can operate without a DB connection.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
 from apps.threads.models import Thread
@@ -77,7 +77,7 @@ def build_fleet_state() -> list[SessionDict]:
       age           — timedelta since last_event_at (or created_at)
       needs_input   — bool (True iff status == waiting_approval)
     """
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     threads = (
         Thread.objects.select_related("host")
         .exclude(status__in=list(_TERMINAL))

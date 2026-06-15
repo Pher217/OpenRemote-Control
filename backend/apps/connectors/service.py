@@ -1,3 +1,10 @@
+"""Service layer for the connectors MCP bridge.
+
+Routes messages, questions, approvals, and session lifecycle events
+between coding-agent sessions and the operator's connector chat surfaces.
+Best-effort delivery is attempted to the active messaging platform.
+"""
+
 import logging
 
 from asgiref.sync import async_to_sync

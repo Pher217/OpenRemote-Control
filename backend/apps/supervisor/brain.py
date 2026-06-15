@@ -10,7 +10,6 @@ read-only boundary explicit in code rather than silently ignoring it.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Protocol, runtime_checkable
 

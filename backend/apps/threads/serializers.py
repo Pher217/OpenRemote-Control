@@ -1,3 +1,9 @@
+"""DRF serializers for the threads app.
+
+Expose Thread and Message models through ModelSerializer classes
+with read-only timestamps.
+"""
+
 from rest_framework import serializers
 
 from apps.threads.models import Message, Thread

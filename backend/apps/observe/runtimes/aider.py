@@ -1,3 +1,8 @@
+"""Aider runtime adapter.
+
+Locates ``.aider.chat.history.md`` Markdown chat-history files and parses
+user/assistant turns into normalized conversation records (role/text/uuid/session_id).
+"""
 import os
 
 from apps.observe.runtimes import register_runtime_adapter

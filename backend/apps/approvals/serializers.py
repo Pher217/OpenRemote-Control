@@ -1,3 +1,8 @@
+"""Approval request serializers.
+
+DRF ModelSerializer for ApprovalRequest exposing all model fields with
+read-only timestamps and signed nonce.
+"""
 from rest_framework import serializers
 
 from apps.approvals.models import ApprovalRequest

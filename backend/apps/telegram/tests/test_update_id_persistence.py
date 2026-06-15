@@ -12,7 +12,7 @@ Uses Django's LocMemCache so no Redis is needed.
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 
 import pytest
 from django.test import override_settings
@@ -85,10 +85,8 @@ async def test_bot_seeds_offset_from_cache(monkeypatch):
 
     cmd = Command()
 
-    try:
+    with contextlib.suppress(_StopLoop):
         await cmd._run()
-    except _StopLoop:
-        pass
 
     assert captured_offsets[0] == 201, (
         f"Expected first offset=201 (seeded from cache last_update_id=200), got {captured_offsets[0]}"
@@ -133,10 +131,8 @@ async def test_bot_advances_cache_after_handling(monkeypatch):
 
     cmd = Command()
 
-    try:
+    with contextlib.suppress(_StopLoop):
         await cmd._run()
-    except _StopLoop:
-        pass
 
     stored = cache.get(_CACHE_KEY)
     assert stored == 100, f"Expected cache to hold update_id=100, got {stored!r}"
@@ -182,10 +178,8 @@ async def test_bot_skips_update_id_lte_last_stored(monkeypatch):
 
     cmd = Command()
 
-    try:
+    with contextlib.suppress(_StopLoop):
         await cmd._run()
-    except _StopLoop:
-        pass
 
     assert handled == [], (
         f"handle_update should not be called for update_id <= last_stored (50), but was called: {handled}"

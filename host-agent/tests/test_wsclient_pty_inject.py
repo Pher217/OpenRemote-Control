@@ -15,7 +15,6 @@ import pytest
 
 from agent_host.wsclient import handle_host_command
 
-
 # ---------------------------------------------------------------------------
 # Happy path — send_keys called with the right args
 # ---------------------------------------------------------------------------

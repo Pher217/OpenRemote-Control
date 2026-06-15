@@ -23,11 +23,10 @@ body:
       options:
         - new runtime adapter (agent CLI)
         - MCP bridge / orc-mcp
-        - chat surface (Telegram / Matrix / other)
+        - chat surface (Telegram / messaging-gateway / other)
         - multi-host / host daemon
         - policy / approvals / audit
         - deploy / ops
-        - frontend / PWA
         - other
     validations:
       required: true

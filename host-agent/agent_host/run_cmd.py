@@ -12,7 +12,7 @@ import websockets
 
 from agent_host.config import load
 from agent_host.pty_session import PtySession
-from agent_host.pty_stream import strip_ansi, stream_pty_output
+from agent_host.pty_stream import stream_pty_output
 from agent_host.wsclient import connect_url
 
 log = logging.getLogger(__name__)

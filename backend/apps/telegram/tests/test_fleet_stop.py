@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from asgiref.sync import async_to_sync
 from channels.db import database_sync_to_async
 from channels.layers import get_channel_layer
 from django.test import override_settings
@@ -142,7 +141,7 @@ async def test_stop_allowlisted_kills_marks_stopped_and_audits(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.3)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     frame = await _try_receive()
@@ -155,8 +154,9 @@ async def test_stop_allowlisted_kills_marks_stopped_and_audits(settings):
     # Thread is STOPPED
     @database_sync_to_async
     def _status():
-        from apps.threads.models import Thread as _T
-        return _T.objects.get(id=thread.id).status
+        from apps.threads.models import Thread
+
+        return Thread.objects.get(id=thread.id).status
 
     status = await _status()
     assert status == "stopped", f"Expected stopped, got {status!r}"
@@ -217,7 +217,7 @@ async def test_stop_non_allowlisted_is_silent_noop(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.15)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     frame = await _try_receive()
@@ -227,8 +227,9 @@ async def test_stop_non_allowlisted_is_silent_noop(settings):
     # Thread still RUNNING
     @database_sync_to_async
     def _status():
-        from apps.threads.models import Thread as _T
-        return _T.objects.get(id=thread.id).status
+        from apps.threads.models import Thread
+
+        return Thread.objects.get(id=thread.id).status
 
     assert await _status() == "running"
 
@@ -380,7 +381,7 @@ async def test_stop_host_frame_shape(settings):
     async def _try_receive():
         try:
             return await asyncio.wait_for(cl.receive(ch), timeout=0.3)
-        except (asyncio.TimeoutError, Exception):
+        except (TimeoutError, Exception):
             return None
 
     frame = await _try_receive()

@@ -4,9 +4,9 @@ import pytest
 from channels.db import database_sync_to_async
 
 from apps.telegram.models import TelegramChat
-from apps.telegram.service import get_or_create_thread_for_chat, handle_update
+from apps.telegram.service import handle_update
 from apps.telegram.telegram_api import redact_token
-from apps.threads.models import Message, Thread
+from apps.threads.models import Message
 
 
 def test_redact_token_strips_secret_from_error_text(settings):

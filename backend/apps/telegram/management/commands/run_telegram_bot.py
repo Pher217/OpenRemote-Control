@@ -1,3 +1,9 @@
+"""Run the Telegram long-polling bot and dispatch incoming updates.
+
+Long-running asyncio loop that pulls updates via getUpdates, routes messages
+and callback queries to the appropriate handlers, and persists the last
+processed update id to avoid replay on restart.
+"""
 import asyncio
 import logging
 

@@ -22,7 +22,6 @@ import pytest
 
 from apps.supervisor.brain import MockBrain, OllamaBrain, ToolUseLLM, summarise_fleet
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
