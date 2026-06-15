@@ -100,7 +100,10 @@ def _topic_link(forum_chat_id: int, topic_id: int) -> str:
 
 @database_sync_to_async
 def _list_drivable_topics(forum_chat_id: int) -> list[tuple[str, int]]:
-    """Return (name, topic_id) pairs for live driveable PTY sessions in this forum."""
+    """Return (name, topic_id) pairs for live driveable sessions in this forum.
+
+    Driveable = headless Claude thread OR PTY thread with a tmux_session_name.
+    """
     out = []
     qs = Thread.objects.filter(
         runtime_mode=Thread.RuntimeModeChoices.PTY,
@@ -111,7 +114,9 @@ def _list_drivable_topics(forum_chat_id: int) -> list[tuple[str, int]]:
     for t in qs:
         m = t.metadata or {}
         tid = m.get("telegram_topic_id")
-        if tid and m.get("tmux_session_name"):
+        if not tid:
+            continue
+        if m.get("headless") or m.get("tmux_session_name"):
             out.append((t.name, int(tid)))
     return out
 
@@ -276,9 +281,10 @@ async def handle_forum_reply(
     # --- Read-only guard -----------------------------------------------------
     is_pty = thread.runtime_mode == Thread.RuntimeModeChoices.PTY
     has_host = thread.host_id is not None
-    has_tmux = bool(thread.metadata.get("tmux_session_name"))
+    is_headless = bool((thread.metadata or {}).get("headless"))
+    has_tmux = bool((thread.metadata or {}).get("tmux_session_name"))
 
-    if not (is_pty and has_host and has_tmux):
+    if not (has_host and (is_headless or (is_pty and has_tmux))):
         drivable = await _list_drivable_topics(configured_forum_id)
         if drivable:
             lines = "\n".join(
@@ -295,6 +301,30 @@ async def handle_forum_reply(
                 "Start one with `orc run` to send input."
             )
         await send(forum_chat_id, body, message_thread_id=message_thread_id)
+        return
+
+    # --- Headless Claude session dispatch ------------------------------------
+    if is_headless:
+        md = thread.metadata or {}
+
+        @database_sync_to_async
+        def _fetch_host():
+            from apps.threads.models import Thread as _T  # noqa: PLC0415
+
+            return _T.objects.select_related("host").get(id=thread.id)
+
+        t_h = await _fetch_host()
+        from apps.hostlink.service import send_host_command  # noqa: PLC0415
+
+        await database_sync_to_async(send_host_command)(
+            t_h.host,
+            "headless.prompt",
+            claude_session_id=md.get("claude_session_id"),
+            cwd=md.get("cwd", ""),
+            text=text,
+            thread_id=str(thread.id),
+            started=bool(md.get("claude_session_started")),
+        )
         return
 
     # --- Driveable PTY session -----------------------------------------------
