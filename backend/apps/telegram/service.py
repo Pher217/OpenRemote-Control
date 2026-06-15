@@ -1,3 +1,12 @@
+"""Core Telegram surface service.
+
+Maps Telegram chats/forum topics to Threads and handles inbound activity:
+plain messages, forum-topic replies, inline-button callback queries (prompt
+and approval answers), and the operator slash commands ``/sessions``,
+``/stop``, ``/run``, and ``/pair`` — including operator auth gating, host
+resolution, session-start prompts, pairing creation, and audit logging.
+"""
+
 import datetime as _dt
 import logging
 import uuid

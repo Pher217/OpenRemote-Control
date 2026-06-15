@@ -1,3 +1,8 @@
+"""Audit log models.
+
+Defines AuditEvent, an append-only record of system activity with
+redacted and encrypted payload retention fields.
+"""
 
 from django.db import models
 

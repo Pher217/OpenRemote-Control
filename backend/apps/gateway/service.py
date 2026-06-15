@@ -1,3 +1,8 @@
+"""Inbound message handling and outbox delivery service for the gateway app.
+
+Routes inbound messages into threads, enqueues outbound replies into the
+gateway outbox, and lets the messaging connector sidecar claim them.
+"""
 import logging
 
 from asgiref.sync import async_to_sync

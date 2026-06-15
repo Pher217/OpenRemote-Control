@@ -1,3 +1,8 @@
+"""Prompt lifecycle service.
+
+Creates prompts bound to a chat thread, looks them up by nonce, and resolves
+them atomically with anti-replay protection via ``select_for_update``.
+"""
 import hashlib
 import json
 from datetime import timedelta

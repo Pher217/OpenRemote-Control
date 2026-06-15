@@ -1,3 +1,9 @@
+"""Provider interface and adapter registry for the Tier-2 chat model app.
+
+Defines the `Tier2Adapter` protocol, normalized streaming events, and the
+lazy-loading registry used to resolve a provider string to an adapter instance.
+"""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator

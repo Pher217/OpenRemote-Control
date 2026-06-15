@@ -1,3 +1,8 @@
+"""Audit signal handlers.
+
+Post-save signal handlers that create AuditEvent entries for Thread,
+Message, and ApprovalRequest lifecycle changes.
+"""
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 

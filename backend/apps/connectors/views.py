@@ -1,3 +1,10 @@
+"""DRF API views for the connectors MCP bridge.
+
+Provides Start, Notify, Ask, Approve and Result endpoints for authenticated
+connector clients, plus an unauthenticated PairClaim endpoint to exchange a
+one-time pairing code for an Ed25519-backed connector identity.
+"""
+
 import secrets
 
 from django.utils import timezone

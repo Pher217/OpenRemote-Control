@@ -1,3 +1,8 @@
+"""DRF serializers for incoming connector bridge requests.
+
+Defines validation schemas for the notify/start/ask/approve chat-surface
+operations that route messages between coding-agent sessions and connectors.
+"""
 from rest_framework import serializers
 
 

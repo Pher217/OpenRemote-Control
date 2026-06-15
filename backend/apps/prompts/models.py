@@ -1,3 +1,8 @@
+"""Prompt model for a question pushed to a chat surface.
+
+Defines the Prompt primitive, its type/trust/status choices, and lifecycle
+helpers such as expiration checks and response recording.
+"""
 import uuid
 
 from django.db import models

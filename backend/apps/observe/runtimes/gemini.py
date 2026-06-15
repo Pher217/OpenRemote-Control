@@ -1,3 +1,8 @@
+"""Gemini runtime adapter.
+
+Locates ``*.jsonl`` transcript files under ``~/.gemini/tmp`` and parses
+user/gemini JSONL records into normalized conversation turns (role/text/uuid/session_id).
+"""
 import json
 import os
 

@@ -1,3 +1,10 @@
+"""Django models for the connectors app: the MCP bridge backend.
+
+Stores connector identities, Ed25519 public keys, one-time pairing codes,
+and connector instances used to route messages between coding-agent
+sessions and chat surfaces.
+"""
+
 import secrets
 
 from django.db import models

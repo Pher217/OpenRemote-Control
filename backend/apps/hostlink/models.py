@@ -1,3 +1,8 @@
+"""Enrollment token models for the multi-host link.
+
+HostToken stores one-way SHA-256 hashes of short-lived tokens used to
+authenticate a host during enrollment and rotation.
+"""
 import hashlib
 import hmac
 import secrets

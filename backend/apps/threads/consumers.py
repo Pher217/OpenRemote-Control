@@ -1,3 +1,9 @@
+"""Channels WebSocket consumer for thread events.
+
+Handles per-thread connections, dispatches incoming text to the thread runtime,
+and broadcasts events to all clients in the thread's channel group.
+"""
+
 import contextlib
 
 from channels.db import database_sync_to_async

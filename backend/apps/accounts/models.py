@@ -1,3 +1,8 @@
+"""Coding-agent provider account models.
+
+Account stores a provider credential or identity (API key, token, certificate,
+etc.) with optional host binding and encrypted-at-rest credential data.
+"""
 import uuid
 
 from django.db import models

@@ -1,3 +1,9 @@
+"""Bearer-token authentication and permission classes for the gateway app.
+
+The messaging-gateway sidecar authenticates with a shared secret provided
+via the MESSAGING_GATEWAY_TOKEN setting.
+"""
+
 import hmac
 
 from django.conf import settings

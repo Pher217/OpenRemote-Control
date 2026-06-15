@@ -1,3 +1,9 @@
+"""Ollama provider adapter for the Tier-2 chat model app.
+
+Streams chat completions from a local Ollama `/api/chat` endpoint and yields
+normalized message-delta and message-complete events.
+"""
+
 import json
 
 import httpx

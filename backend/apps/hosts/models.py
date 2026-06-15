@@ -1,3 +1,8 @@
+"""Fleet host models.
+
+Host represents a registered machine in the fleet, including its OS,
+network identity, status, and capability metadata.
+"""
 import uuid
 
 from django.db import models

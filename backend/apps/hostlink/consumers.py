@@ -1,3 +1,9 @@
+"""WebSocket consumer for an enrolled host daemon.
+
+Authenticates the daemon via per-host token and HMAC-signed nonce, then relays
+backend commands and PTY streams while ingesting observed session events and
+lines back into the local thread/telegram pipeline.
+"""
 import logging
 import time
 from pathlib import Path

@@ -1,3 +1,8 @@
+"""Stream active coding-agent session transcripts from multiple runtimes to chat.
+
+Long-running asyncio loop that tails runtime session files, parses new turns,
+deduplicates them, and forwards each turn to the active messaging recipient.
+"""
 import asyncio
 import time
 from pathlib import Path

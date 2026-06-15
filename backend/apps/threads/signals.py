@@ -1,3 +1,9 @@
+"""Django signal handlers for the threads app.
+
+Broadcasts thread update events to the channel layer group
+when a Thread instance is saved.
+"""
+
 import structlog
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer

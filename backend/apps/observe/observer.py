@@ -1,3 +1,8 @@
+"""Per-session tail/observe loop for coding-agent transcripts.
+
+Selects active session files, reads newly appended lines, and dispatches
+turn parsing and persistence through the runtime adapter.
+"""
 import os
 from pathlib import Path
 

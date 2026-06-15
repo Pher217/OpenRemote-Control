@@ -1,3 +1,7 @@
+"""Agent skill registry defining reusable capabilities with system prompts
+and default runtime, account and project bindings.
+"""
+
 import uuid
 
 from django.db import models

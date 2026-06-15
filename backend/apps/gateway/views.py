@@ -1,3 +1,9 @@
+"""DRF API views exposed to the messaging-gateway Node sidecar.
+
+Provides an outbox poll endpoint and an inbound message endpoint for
+WhatsApp, Slack, Discord, Signal, and iMessage.
+"""
+
 from rest_framework import exceptions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView

@@ -1,3 +1,9 @@
+"""DRF views for the threads app.
+
+Provides ModelViewSets for Thread and Message, including a nested
+messages action on ThreadViewSet.
+"""
+
 from rest_framework import decorators, permissions, response, viewsets
 
 from apps.policies.permissions import PolicyPermission

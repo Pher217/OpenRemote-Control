@@ -1,3 +1,7 @@
+"""Project model grouping repository context, sensitivity, policy profile,
+and allowed accounts, hosts and runtimes for sessions.
+"""
+
 import uuid
 
 from django.db import models
