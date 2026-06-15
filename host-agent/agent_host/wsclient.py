@@ -555,7 +555,11 @@ async def run_sender(
                                 # reconnect loop continues — no stale loop-variable binding.
                                 last_pong[0] = time.monotonic()  # noqa: B023
                             try:
-                                on_command(frame)
+                                # Pass the outbound queue so handlers that reply
+                                # (headless.prompt, session.start streaming) can
+                                # enqueue frames back to the backend. Without it,
+                                # they silently drop the reply ("no incoming_queue").
+                                on_command(frame, _incoming)
                             except Exception:
                                 log.exception("on_command raised — ignoring")
                         # All other types are silently ignored.

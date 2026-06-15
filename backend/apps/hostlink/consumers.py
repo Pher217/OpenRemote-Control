@@ -257,13 +257,28 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         host_id = self.host.id
 
         def _reconcile():
-            Thread.objects.filter(
+            # Decide in Python to avoid JSONField exclude/NULL pitfalls (a missing
+            # key is NOT "false"). Only tmux-backed PTY sessions are reconciled:
+            #   - a thread is completed iff it has a real tmux_session_name that is
+            #     no longer in the live set.
+            #   - headless threads (tmux_session_name is None) and threads with no
+            #     tmux name are skipped — their liveness is not tmux-based.
+            candidates = Thread.objects.filter(
                 host_id=host_id,
                 runtime_mode=Thread.RuntimeModeChoices.PTY,
                 status=Thread.StatusChoices.RUNNING,
-            ).exclude(
-                metadata__tmux_session_name__in=live,
-            ).update(status=Thread.StatusChoices.COMPLETED)
+            )
+            stale_ids = [
+                t.id
+                for t in candidates
+                if (name := (t.metadata or {}).get("tmux_session_name"))
+                and name not in live
+                and not (t.metadata or {}).get("headless")
+            ]
+            if stale_ids:
+                Thread.objects.filter(id__in=stale_ids).update(
+                    status=Thread.StatusChoices.COMPLETED
+                )
 
         await database_sync_to_async(_reconcile)()
 

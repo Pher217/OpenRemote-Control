@@ -380,9 +380,11 @@ async def test_recv_dispatches_host_command_to_handler(tmp_path):
     stop = asyncio.Event()
 
     received_commands: list[dict] = []
+    received_queues: list = []
 
-    def capture_command(frame: dict) -> None:
+    def capture_command(frame: dict, incoming_queue=None) -> None:
         received_commands.append(frame)
+        received_queues.append(incoming_queue)
 
     ping_frame = json.dumps({"type": "host_command", "command": "ping"})
     fake_ws = _FrameWs([ping_frame])  # yields ping then raises ConnectionResetError
@@ -394,6 +396,9 @@ async def test_recv_dispatches_host_command_to_handler(tmp_path):
     assert len(received_commands) == 1
     assert received_commands[0]["type"] == "host_command"
     assert received_commands[0]["command"] == "ping"
+    # The recv loop MUST pass the outbound queue so reply-producing handlers
+    # (headless.prompt, session.start) can enqueue frames back to the backend.
+    assert received_queues[0] is not None
 
 
 @pytest.mark.asyncio
@@ -409,7 +414,7 @@ async def test_recv_malformed_frame_does_not_kill_loop(tmp_path):
 
     received_commands: list[dict] = []
 
-    def capture_command(frame: dict) -> None:
+    def capture_command(frame: dict, incoming_queue=None) -> None:
         received_commands.append(frame)
 
     malformed = "this is not json{{{"

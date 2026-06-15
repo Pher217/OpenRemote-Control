@@ -42,6 +42,26 @@ def _make_pty_thread(host, session_name, *, status=Thread.StatusChoices.RUNNING)
     )
 
 
+def _make_headless_thread(host):
+    from apps.accounts.models import Account
+
+    account, _ = Account.objects.get_or_create(
+        provider="pty",
+        label="orc-run",
+        defaults={"auth_type": "none", "credential_type": "none"},
+    )
+    return Thread.objects.create(
+        external_session_ref="headless-main",
+        name="orc-run: headless",
+        runtime="pty",
+        runtime_mode=Thread.RuntimeModeChoices.PTY,
+        host=host,
+        account=account,
+        status=Thread.StatusChoices.RUNNING,
+        metadata={"headless": True, "claude_session_id": "sid-1", "tmux_session_name": None},
+    )
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestPtyReconcile:
@@ -126,3 +146,18 @@ class TestPtyReconcile:
         live_refreshed = await sync_to_async(Thread.objects.get)(id=live.id)
         assert dead_refreshed.status == Thread.StatusChoices.COMPLETED
         assert live_refreshed.status == Thread.StatusChoices.RUNNING
+
+    async def test_headless_thread_not_reconciled(self):
+        """
+        GIVEN a RUNNING headless thread (PTY mode, no tmux_session_name)
+        WHEN session.pty_reconcile is received with an empty live list
+        THEN the headless thread stays RUNNING (its liveness is not tmux-based).
+        """
+        host = await sync_to_async(_make_host)("reconcile-host-5")
+        headless = await sync_to_async(_make_headless_thread)(host)
+        consumer = _make_consumer(host)
+
+        await consumer._handle_pty_reconcile({"session_names": []})
+
+        refreshed = await sync_to_async(Thread.objects.get)(id=headless.id)
+        assert refreshed.status == Thread.StatusChoices.RUNNING

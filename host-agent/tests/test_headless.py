@@ -184,6 +184,25 @@ def test_valid_result_json_returns_text_and_not_is_error():
     assert result == {"text": expected_text, "is_error": False}
 
 
+def test_falls_back_to_other_session_flag_on_failure():
+    """
+    GIVEN started=False so the first attempt uses --session-id, and that attempt
+          fails (e.g. the session already exists → non-JSON error output)
+    WHEN  run_headless retries
+    THEN  it falls back to --resume and returns the successful result.
+    """
+    session_id = "aaaaaaaa-0000-0000-0000-000000000009"
+    good = json.dumps({"type": "result", "is_error": False, "result": "RECOVERED", "session_id": session_id})
+    # 1st call (--session-id): non-JSON error; 2nd call (--resume): success.
+    with patch("subprocess.run", side_effect=[_make_completed("error: session exists"), _make_completed(good)]) as mock_run:
+        result = run_headless("hi", session_id, cwd="", started=False)
+
+    assert result == {"text": "RECOVERED", "is_error": False}
+    assert mock_run.call_count == 2
+    first_argv, second_argv = mock_run.call_args_list[0][0][0], mock_run.call_args_list[1][0][0]
+    assert "--session-id" in first_argv and "--resume" in second_argv
+
+
 def test_is_error_true_in_result_json_propagates():
     """
     GIVEN subprocess.run returns a valid Claude result JSON with is_error=True
