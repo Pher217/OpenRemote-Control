@@ -120,6 +120,17 @@ class PtySession:
         if session is not None:
             session.kill()
 
+    def list_live_sessions(self) -> list[str]:
+        """Names of all live tmux sessions on this host.
+
+        Returns an empty list when tmux has zero sessions.  Any exception from
+        libtmux (e.g. no tmux server running, enumeration failure) propagates
+        to the caller — the caller MUST treat that as "unknown" and NOT send a
+        reconcile frame, to avoid falsely marking every session dead.
+        """
+        server = self._server()
+        return [s.name for s in server.sessions]
+
     def exists(self, name: str) -> bool:
         """Return ``True`` if a session named *name* currently exists."""
         server = self._server()

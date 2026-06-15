@@ -118,6 +118,8 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             await self._handle_pty_output(content.get("data", {}))
         elif msg_type == "session.pty_end":
             await self._handle_pty_end(content.get("data", {}))
+        elif msg_type == "session.pty_reconcile":
+            await self._handle_pty_reconcile(content.get("data", {}))
         elif msg_type == "host_heartbeat":
             # Echo a ping back THROUGH the group path (group_send → Redis →
             # this consumer's host_command → ws). This exercises the exact
@@ -238,6 +240,28 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             status=Thread.StatusChoices.COMPLETED
         )
         self._pty_threads.pop(session_name, None)
+
+    async def _handle_pty_reconcile(self, data: dict):
+        """Mark RUNNING PTY threads for this host COMPLETED when their tmux session is gone.
+
+        Fail-safe: if session_names key is absent the frame is treated as a no-op.
+        Scope is strictly limited to self.host — never touches other hosts' threads.
+        """
+        if "session_names" not in data:
+            return
+        live = set(data["session_names"])
+        host_id = self.host.id
+
+        def _reconcile():
+            Thread.objects.filter(
+                host_id=host_id,
+                runtime_mode=Thread.RuntimeModeChoices.PTY,
+                status=Thread.StatusChoices.RUNNING,
+            ).exclude(
+                metadata__tmux_session_name__in=live,
+            ).update(status=Thread.StatusChoices.COMPLETED)
+
+        await database_sync_to_async(_reconcile)()
 
     def _get_or_create_pty_thread(self, session_name: str, command: str, cwd: str):
         """Synchronous helper — must be called via database_sync_to_async."""
