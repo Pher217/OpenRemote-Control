@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3,<9",
+    "pytest>=8.3,<10",
     "pytest-asyncio>=0.24,<1",
     # ruff/bandit are pinned to a minor range: they gate CI (blocking steps), and an
     # unpinned floor lets a new release silently turn CI red with no code change.
