@@ -244,6 +244,39 @@ def approve(
     return prompt.nonce
 
 
+def resolve_pending_ask(text: str, by: str = "") -> Prompt | None:
+    """Answer the most-recent waiting ``ask_human`` question with a typed reply.
+
+    ``ask_human`` (options-less) creates a FREE_TEXT prompt, delivers it to the
+    operator's chat, then polls :func:`result` for an answer. Nothing previously
+    turned the operator's typed reply back into that answer, so every ask_human
+    timed out. This closes that gap: the operator's next free-text message in the
+    prompt chat becomes the answer (request -> answer driving).
+
+    FREE_TEXT prompts are only ever created by :func:`ask`, so selecting on
+    prompt_type is sufficient to scope this to connector questions (the chat-LLM
+    threads never create them). Returns the resolved Prompt, or None when no
+    free-text prompt is awaiting an answer — the caller then falls back to normal
+    chat dispatch. The resolve itself is row-locked and anti-replay safe, so a
+    concurrent answer/expiry simply yields None here.
+    """
+    from apps.prompts.service import resolve
+
+    now = timezone.now()
+    pending = (
+        Prompt.objects.filter(
+            prompt_type=Prompt.PromptType.FREE_TEXT,
+            status=Prompt.StatusChoices.PENDING,
+            expires_at__gt=now,
+        )
+        .order_by("-requested_at")
+        .first()
+    )
+    if pending is None:
+        return None
+    return resolve(pending.nonce, text=text, by=by)
+
+
 def result(nonce: str) -> dict:
     """Return the current status dict for a prompt nonce."""
     prompt = get_by_nonce(nonce)

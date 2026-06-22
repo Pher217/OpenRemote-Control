@@ -427,6 +427,20 @@ async def handle_update(chat_id: int, text: str, *, from_user_id: int | None, se
         await _handle_pair_command(chat_id, tool, label)
         return
 
+    # An ask_human question delivered to this chat turns the operator's next
+    # typed message into its answer (request -> answer driving) instead of
+    # routing it to the chat LLM. Operator-gated: only an allowlisted operator
+    # (not merely an allowlisted chat) can answer a pending connector prompt.
+    if from_user_id in settings.TELEGRAM_ALLOWED_CHAT_IDS:
+        from apps.connectors.service import resolve_pending_ask  # noqa: PLC0415
+
+        resolved = await database_sync_to_async(resolve_pending_ask)(
+            text, by=str(from_user_id)
+        )
+        if resolved is not None:
+            await send(chat_id, "✓ Answer sent to the waiting session.")
+            return
+
     thread = await database_sync_to_async(get_or_create_thread_for_chat)(chat_id)
     thread = await _get_thread_with_account(thread.id)
 
