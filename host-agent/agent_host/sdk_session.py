@@ -127,35 +127,47 @@ async def run_turn(
             return PermissionResultAllow()
         return PermissionResultDeny(message="Denied by operator from chat.")
 
-    # Do not load the operator's global allow-rules — they would auto-approve
-    # tools and bypass the chat gate. Only the session itself drives permissions.
-    opts = ClaudeAgentOptions(
-        can_use_tool=can_use_tool,
-        permission_mode="default",
-        cwd=cwd,
-        setting_sources=[],
-        resume=claude_session_id if started else None,
-    )
+    def _opts(mode: str) -> ClaudeAgentOptions:
+        # Do not load the operator's global allow-rules — they would auto-approve
+        # tools and bypass the chat gate. Only the session itself drives permissions.
+        # mode "create": pin the session to our id (--session-id); mode "resume":
+        # continue it (--resume). Pinning on creation is what makes a later resume
+        # find the conversation (the bug: resume=None created an SDK-chosen id).
+        kw = {"session_id": claude_session_id} if mode == "create" else {"resume": claude_session_id}
+        return ClaudeAgentOptions(
+            can_use_tool=can_use_tool,
+            permission_mode="default",
+            cwd=cwd,
+            setting_sources=[],
+            **kw,
+        )
 
-    text_parts: list[str] = []
-    is_error = False
-    try:
+    async def _attempt(mode: str) -> dict:
+        text_parts: list[str] = []
         with anyio.move_on_after(timeout) as scope:
-            async with ClaudeSDKClient(options=opts) as client:
+            async with ClaudeSDKClient(options=_opts(mode)) as client:
                 await client.query(prompt)
                 async for msg in client.receive_response():
                     for block in getattr(msg, "content", None) or []:
                         if type(block).__name__ == "TextBlock":
                             text_parts.append(getattr(block, "text", ""))
-                result = getattr(msg, "result", None)  # ResultMessage carries final text
-                if result:
-                    text_parts.append(str(result))
+                    result = getattr(msg, "result", None)  # ResultMessage final text
+                    if result:
+                        text_parts.append(str(result))
         if scope.cancel_called:
             return {"text": f"(sdk turn timed out after {timeout}s)", "is_error": True}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("sdk_session: turn failed: %s", exc)
-        return {"text": f"(sdk turn failed: {exc})", "is_error": True}
+        # Deduplicate: ResultMessage.result usually repeats the last TextBlock.
+        return {"text": text_parts[-1] if text_parts else "", "is_error": False}
 
-    # Deduplicate: ResultMessage.result usually repeats the last TextBlock.
-    text = text_parts[-1] if text_parts else ""
-    return {"text": text, "is_error": is_error}
+    # Resume-or-create with fallback: `started` is a hint, not truth (a daemon
+    # restart desyncs it). Try the hinted mode, fall back to the other — create a
+    # fresh session if resume can't find it, or resume if create says it exists.
+    order = ["resume", "create"] if started else ["create", "resume"]
+    last_exc: Exception | None = None
+    for mode in order:
+        try:
+            return await _attempt(mode)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            log.warning("sdk_session: turn (%s) failed: %s", mode, exc)
+    return {"text": f"(sdk turn failed: {last_exc})", "is_error": True}
