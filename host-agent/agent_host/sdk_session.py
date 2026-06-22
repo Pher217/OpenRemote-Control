@@ -23,6 +23,63 @@ log = logging.getLogger(__name__)
 ApproveFn = Callable[[str, dict, object], Awaitable[bool]]
 
 
+def make_approve(backend_url: str, host_token: str, thread_id: str, *, poll_interval: float = 2.0, timeout: float = 1700.0) -> ApproveFn:
+    """Build an ``approve`` callback that asks the operator via the session topic.
+
+    Posts the tool request to the host-authenticated approval endpoint (which
+    delivers Allow/Deny buttons to the session's Telegram topic), then polls for
+    the decision. Fail-closed: any error / timeout / expiry → deny.
+    """
+    import httpx
+
+    base = backend_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {host_token}"}
+
+    async def approve(tool_name: str, tool_input: dict, ctx: object) -> bool:
+        title = _permission_title(tool_name, tool_input, ctx)
+        preview = _input_preview(tool_input)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.post(
+                    f"{base}/api/hostlink/approve",
+                    json={"thread_id": thread_id, "title": title, "preview": preview},
+                    headers=headers,
+                )
+                r.raise_for_status()
+                nonce = r.json()["nonce"]
+                import anyio
+                deadline = timeout
+                elapsed = 0.0
+                while elapsed < deadline:
+                    pr = await c.get(f"{base}/api/hostlink/approve/{nonce}", headers=headers)
+                    pr.raise_for_status()
+                    data = pr.json()
+                    st = data.get("status")
+                    if st == "answered":
+                        return data.get("decision") == "allow"
+                    if st in ("expired", "cancelled"):
+                        return False
+                    await anyio.sleep(poll_interval)
+                    elapsed += poll_interval
+        except Exception:
+            log.exception("sdk_session: approval request failed; denying %s", tool_name)
+            return False
+        return False  # timed out → deny
+
+    return approve
+
+
+def _input_preview(tool_input: dict, limit: int = 300) -> str:
+    """A short, safe preview of the tool input for the approval body."""
+    import json as _json
+
+    try:
+        s = _json.dumps(tool_input, ensure_ascii=False)
+    except Exception:
+        s = str(tool_input)
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
 def _permission_title(tool_name: str, tool_input: dict, ctx: object) -> str:
     """Human-readable approval line. Prefer the SDK-provided title, else build one."""
     title = getattr(ctx, "title", None)

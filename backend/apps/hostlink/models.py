@@ -59,3 +59,18 @@ class HostToken(models.Model):
         if token is None:
             return False
         return hmac.compare_digest(candidate_hash, token.token_hash)
+
+    @classmethod
+    def authenticate(cls, raw_token: str):
+        """Return the Host for an active token, or None. Used by HTTP host auth.
+
+        The token hash uniquely identifies the active token, so a hash lookup
+        resolves the host without the caller naming it (no host-id spoofing).
+        """
+        candidate_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        token = (
+            cls.objects.select_related("host")
+            .filter(token_hash=candidate_hash, revoked_at__isnull=True)
+            .first()
+        )
+        return token.host if token is not None else None
