@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -29,7 +30,7 @@ from typing import Any
 
 import websockets
 
-from agent_host.config import HostConfig
+from agent_host.config import HostConfig, load
 from agent_host.queue import OfflineQueue
 from agent_host.signing import sign
 
@@ -275,11 +276,28 @@ def handle_host_command(
             lock = _headless_locks[claude_session_id]
 
             async with lock:
-                from agent_host.claude_headless import run_headless  # noqa: PLC0415
+                # Engine select: ORC_HEADLESS_ENGINE=sdk runs the turn via the
+                # Agent SDK with per-tool chat approval (Allow/Deny buttons in the
+                # session topic). Default stays `claude -p` bypassPermissions.
+                use_sdk = os.environ.get("ORC_HEADLESS_ENGINE", "").lower() == "sdk"
+                cfg = load() if use_sdk else None
+                if use_sdk and cfg is not None and thread_id:
+                    from agent_host.sdk_session import make_approve, run_turn  # noqa: PLC0415
 
-                result = await asyncio.to_thread(
-                    run_headless, text, claude_session_id, cwd, started
-                )
+                    approve = make_approve(cfg.backend_url, cfg.token, thread_id)
+                    result = await run_turn(
+                        text,
+                        claude_session_id=claude_session_id,
+                        cwd=cwd,
+                        started=started,
+                        approve=approve,
+                    )
+                else:
+                    from agent_host.claude_headless import run_headless  # noqa: PLC0415
+
+                    result = await asyncio.to_thread(
+                        run_headless, text, claude_session_id, cwd, started
+                    )
 
             if incoming_queue is not None:
                 try:
