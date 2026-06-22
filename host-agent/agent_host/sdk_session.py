@@ -139,6 +139,11 @@ async def run_turn(
             permission_mode="default",
             cwd=cwd,
             setting_sources=[],
+            # Interactive-only tools have no UI in a headless/chat-driven session:
+            # AskUserQuestion/ExitPlanMode would surface as a useless approval and
+            # then no-op. Disallow them so the agent asks/plans in PLAIN TEXT, which
+            # the operator answers as the next message in the topic.
+            disallowed_tools=["AskUserQuestion", "ExitPlanMode"],
             **kw,
         )
 
