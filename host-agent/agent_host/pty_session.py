@@ -35,11 +35,22 @@ import time
 
 from agent_host.input_policy import classify_input
 
-# Delay between the typed prompt and each submit Enter, and between the two
-# Enters. A full-screen TUI (e.g. claude) can drop an Enter that arrives in the
-# same burst as the pasted text or during a redraw; spacing the Enters out and
-# sending two makes a dropped submit very unlikely.
-_SUBMIT_KEY_DELAY = 0.12
+# Submit timing for a full-screen TUI (e.g. claude). The TUI ingests pasted text
+# asynchronously (char-by-char render / bracketed paste); an Enter that arrives
+# before the text has landed hits an empty input, so the prompt sits unsubmitted
+# in the box (observed live with claude — text visible, never sent). We therefore
+# wait for the text to SETTLE before the first Enter, scaling the wait with text
+# length, then send a second spaced Enter as a dropped-submit backstop (a no-op
+# on already-submitted/empty input, so it never double-submits real text).
+_SUBMIT_SETTLE_BASE = 0.8
+_SUBMIT_SETTLE_PER_CHAR = 0.003
+_SUBMIT_SETTLE_MAX = 3.0
+_SUBMIT_KEY_DELAY = 0.15
+
+
+def _submit_settle_seconds(text: str) -> float:
+    """Seconds to wait for a TUI to ingest `text` before submitting."""
+    return min(_SUBMIT_SETTLE_MAX, _SUBMIT_SETTLE_BASE + len(text) * _SUBMIT_SETTLE_PER_CHAR)
 
 
 class PtySession:
@@ -241,12 +252,12 @@ class PtySession:
         # Type the prompt WITHOUT submitting (suppress_history=False keeps it in
         # shell history for auditability).
         pane.send_keys(stripped, enter=False, suppress_history=False)
-        # Submit by sending Enter as a SEPARATE key, twice with a short gap.
-        # Sending text+Enter together (enter=True) can race a full-screen TUI's
-        # redraw and drop the Enter, leaving the prompt sitting unsubmitted in
-        # the input box (observed with claude). A second Enter is a harmless
-        # no-op on already-submitted/empty input, so two spaced Enters make a
-        # dropped submit very unlikely while never double-submitting real text.
-        for _ in range(2):
-            time.sleep(_SUBMIT_KEY_DELAY)
-            pane.cmd("send-keys", "Enter")
+        # Wait for the TUI to fully ingest the pasted text BEFORE the first Enter.
+        # Sending Enter too soon (the old 0.12s) lands it on an empty input and
+        # the prompt sits unsubmitted (observed live with claude). The settle wait
+        # scales with text length; a second spaced Enter backstops a dropped first
+        # one and is a harmless no-op on already-submitted/empty input.
+        time.sleep(_submit_settle_seconds(stripped))
+        pane.cmd("send-keys", "Enter")
+        time.sleep(_SUBMIT_KEY_DELAY)
+        pane.cmd("send-keys", "Enter")
