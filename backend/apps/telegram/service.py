@@ -278,6 +278,24 @@ async def handle_forum_reply(
         )
         return
 
+    # --- Pending ask_human answer --------------------------------------------
+    # A connector session delivers its ask_human question into its own topic; a
+    # typed reply here is that question's answer. Resolve a pending free-text
+    # prompt for THIS thread before the read-only/inject logic (a connector
+    # thread is API-mode and would otherwise bounce as read-only).
+    from apps.connectors.service import resolve_pending_ask  # noqa: PLC0415
+
+    resolved = await database_sync_to_async(resolve_pending_ask)(
+        text, by=str(from_user_id), thread=thread
+    )
+    if resolved is not None:
+        await send(
+            forum_chat_id,
+            "✓ Got it — sent to the session.",
+            message_thread_id=message_thread_id,
+        )
+        return
+
     # --- Read-only guard -----------------------------------------------------
     is_pty = thread.runtime_mode == Thread.RuntimeModeChoices.PTY
     has_host = thread.host_id is not None
