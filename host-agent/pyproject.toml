@@ -13,6 +13,7 @@ dependencies = [
     "GitPython>=3.1",
     "watchdog>=5.0",
     "libtmux>=0.30",
+    "claude-agent-sdk>=0.2.106",
 ]
 
 [project.optional-dependencies]
