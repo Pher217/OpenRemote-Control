@@ -122,6 +122,82 @@ def _broadcast_text(text: str) -> None:
     except Exception:
         logger.exception("connector broadcast: delivery failed (best-effort)")
 
+
+def _thread_topic(thread) -> tuple[int, int] | None:
+    """Return (forum_chat_id, topic_id) when this thread owns a forum topic, else None.
+
+    A connector session gets its own Telegram forum topic at start_session time;
+    notify/ask/approve then deliver INTO that topic so the whole session lives in
+    one channel the operator can both read and reply in.
+    """
+    md = thread.metadata or {}
+    topic_id = md.get("telegram_topic_id")
+    forum_chat_id = md.get("telegram_forum_chat_id")
+    if topic_id and forum_chat_id:
+        return int(forum_chat_id), int(topic_id)
+    return None
+
+
+def _deliver_text_to_thread(thread, text: str) -> None:
+    """Send plain text into the thread's own forum topic, else the active recipient."""
+    from apps.messaging import routing
+
+    topic = _thread_topic(thread)
+    if topic is not None and routing.is_telegram():
+        from apps.telegram.telegram_api import send_message
+
+        forum_chat_id, topic_id = topic
+        try:
+            async_to_sync(send_message)(forum_chat_id, text, message_thread_id=topic_id)
+        except Exception:
+            logger.exception("connector deliver: topic text delivery failed (best-effort)")
+        return
+    _broadcast_text(text)
+
+
+def _ensure_session_topic(thread, session_name: str) -> None:
+    """Create a dedicated Telegram forum topic for this connector session.
+
+    Best-effort: on a non-forum chat or any API error, falls back to a plain
+    broadcast so the start announcement is never lost. Stores telegram_topic_id +
+    telegram_forum_chat_id on the thread so inbound replies in that topic resolve
+    back to this thread (apps.telegram.service._lookup_thread_for_topic).
+    """
+    from apps.messaging import routing
+
+    if not routing.is_telegram():
+        _broadcast_text(f"🎮 Remote-control session started: {session_name}")
+        return
+
+    recipient = routing.active_recipient()
+    if not recipient:
+        return
+
+    try:
+        from apps.observe.delivery import pick_color
+        from apps.telegram.telegram_api import create_forum_topic, send_message
+
+        forum_chat_id = int(recipient)
+        color = pick_color(str(thread.id))
+        topic_id = async_to_sync(create_forum_topic)(forum_chat_id, session_name[:128], color)
+
+        thread.metadata = {
+            **(thread.metadata or {}),
+            "telegram_topic_id": topic_id,
+            "telegram_forum_chat_id": forum_chat_id,
+        }
+        thread.save(update_fields=["metadata"])
+
+        async_to_sync(send_message)(
+            forum_chat_id,
+            f"🎮 Remote-control session started: {session_name}\n"
+            "Reply in this topic to talk to the session.",
+            message_thread_id=topic_id,
+        )
+    except Exception:
+        logger.exception("start_session: topic creation failed; falling back to broadcast")
+        _broadcast_text(f"🎮 Remote-control session started: {session_name}")
+
 def start_session(
     connector_id: str,
     tool: str,
@@ -164,7 +240,7 @@ def start_session(
         instance.workspace_root = workspace_root or instance.workspace_root
         instance.save(update_fields=["thread", "workspace_root", "last_seen_at"])
 
-    _broadcast_text(f"🎮 Remote-control session started: {session_name}")
+    _ensure_session_topic(thread, session_name)
 
     return {"thread_id": str(thread.id), "name": session_name}
 
@@ -184,7 +260,7 @@ def notify(
         sequence=_next_sequence(thread),
     )
 
-    _broadcast_text(message)
+    _deliver_text_to_thread(thread, message)
 
 
 def ask(
@@ -210,7 +286,9 @@ def ask(
         question=question,
         options=prompt_options,
         trust_class=Prompt.TrustClass.DECISION,
-        ttl_seconds=900,
+        # ask_human is human-in-the-loop driving from a phone: give the operator
+        # comfortable time to reply (1h) rather than the 15m approval default.
+        ttl_seconds=3600,
     )
 
     _deliver(prompt)
@@ -244,7 +322,7 @@ def approve(
     return prompt.nonce
 
 
-def resolve_pending_ask(text: str, by: str = "") -> Prompt | None:
+def resolve_pending_ask(text: str, by: str = "", thread=None) -> Prompt | None:
     """Answer the most-recent waiting ``ask_human`` question with a typed reply.
 
     ``ask_human`` (options-less) creates a FREE_TEXT prompt, delivers it to the
@@ -259,19 +337,22 @@ def resolve_pending_ask(text: str, by: str = "") -> Prompt | None:
     free-text prompt is awaiting an answer — the caller then falls back to normal
     chat dispatch. The resolve itself is row-locked and anti-replay safe, so a
     concurrent answer/expiry simply yields None here.
+
+    Pass ``thread`` to scope to one session's topic (the forum-reply path, where
+    the reply lands in a specific session's topic). Omit it for the threadless
+    chat path (General/DM), where the most-recent pending question is answered.
     """
     from apps.prompts.service import resolve
 
     now = timezone.now()
-    pending = (
-        Prompt.objects.filter(
-            prompt_type=Prompt.PromptType.FREE_TEXT,
-            status=Prompt.StatusChoices.PENDING,
-            expires_at__gt=now,
-        )
-        .order_by("-requested_at")
-        .first()
+    qs = Prompt.objects.filter(
+        prompt_type=Prompt.PromptType.FREE_TEXT,
+        status=Prompt.StatusChoices.PENDING,
+        expires_at__gt=now,
     )
+    if thread is not None:
+        qs = qs.filter(thread=thread)
+    pending = qs.order_by("-requested_at").first()
     if pending is None:
         return None
     return resolve(pending.nonce, text=text, by=by)
@@ -329,9 +410,15 @@ def _deliver(prompt: Prompt) -> None:
             if prompt.body:
                 text = f"{text}\n\n{prompt.body}"
 
+            # Deliver into the session's own topic when it has one, so the
+            # question appears in the same channel the operator reads and replies
+            # in; otherwise fall back to the active recipient (forum General/DM).
+            topic = _thread_topic(prompt.thread)
+            chat_id, thread_id = topic if topic is not None else (int(recipient), None)
             async_to_sync(send_message)(
-                int(recipient),
+                chat_id,
                 text,
+                message_thread_id=thread_id,
                 reply_markup=reply_markup,
             )
         else:
