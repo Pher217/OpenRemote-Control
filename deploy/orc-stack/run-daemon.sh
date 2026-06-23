@@ -10,7 +10,10 @@ cd "$ORC_REPO/host-agent"
 # The recv loop (headless/inject) always runs regardless of runtimes.
 # Safety: this stack does NOT run run_session_observer — both paths delivering the
 # same sessions would double-post to Telegram. Keep it that way.
-exec "$ORC_REPO/host-agent/.venv/bin/python" -c "
+# -u: unbuffered stdout/stderr so launchd-redirected logs flush line-by-line.
+# Without it, Python block-buffers under a non-tty fd and the daemon log looks
+# frozen for minutes (a healthy daemon is quiet, so the buffer rarely fills).
+exec "$ORC_REPO/host-agent/.venv/bin/python" -u -c "
 import os
 from agent_host.config import load
 from agent_host.daemon import run
