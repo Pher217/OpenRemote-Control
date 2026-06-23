@@ -52,8 +52,34 @@ async def run_pty(cfg, command, session_name=None, cwd=None):
                 },
             }))
 
-            # Shared capture/stream loop (also used by session.start handler).
-            await stream_pty_output(ws, pty, session_name)
+            # Run output streaming and inbound command handling concurrently so
+            # pty.inject frames delivered to this ws connection are processed
+            # (previously stream_pty_output ran alone with no recv loop, causing
+            # inject frames sent via group_send to be silently dropped here).
+            stream_done = asyncio.Event()
+
+            async def _stream() -> None:
+                await stream_pty_output(ws, pty, session_name)
+                stream_done.set()
+
+            async def _recv() -> None:
+                from agent_host.wsclient import handle_host_command  # noqa: PLC0415
+
+                while not stream_done.is_set():
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except TimeoutError:
+                        continue
+                    except Exception:
+                        break
+                    try:
+                        frame = json.loads(raw)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(frame, dict) and frame.get("type") == "host_command":
+                        handle_host_command(frame)
+
+            await asyncio.gather(_stream(), _recv())
 
     except KeyboardInterrupt:
         # Leave tmux session running for inspection.

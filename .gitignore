@@ -105,6 +105,9 @@ worktrees/
 .screenshots/
 codex-review-raw.txt
 
+# Deploy env — contains local machine paths; copy from orc-stack.env.example
+deploy/orc-stack/orc-stack.env
+
 # Backups
 *.bak
 backups/
