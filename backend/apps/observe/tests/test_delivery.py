@@ -209,7 +209,7 @@ async def test_topic_name_and_intro_from_meta():
         {"repo": "agent-command-center", "branch": "claude/x", "title": "My Title"},
     )
 
-    assert _topic_name(thread) == "claude_code · agent-command-center · My Title"
+    assert _topic_name(thread) == "👁 claude_code · agent-command-center · My Title"
     assert len(_topic_name(thread)) <= 128
 
     turn1 = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Smeta123"}
@@ -221,7 +221,7 @@ async def test_topic_name_and_intro_from_meta():
 
     assert len(fake.create_calls) == 1
     _chat_id, name, _color = fake.create_calls[0]
-    assert name == "claude_code · agent-command-center · My Title"
+    assert name == "👁 claude_code · agent-command-center · My Title"
 
     intro, parse_mode = fake.send_calls[0][1], fake.send_calls[0][3]
     assert parse_mode == "HTML"

@@ -150,9 +150,10 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         )
 
         # Stamp the host server-side — never trust any host_id in the payload.
-        if thread.host_id != self.host.id:
+        if thread.host_id != self.host.id or not (thread.metadata or {}).get("host_name"):
             thread.host = self.host
-            await database_sync_to_async(thread.save)(update_fields=["host"])
+            thread.metadata = {**(thread.metadata or {}), "host_name": self.host.name}
+            await database_sync_to_async(thread.save)(update_fields=["host", "metadata"])
 
         if role and text:
             await record_turn(thread, role, text)
@@ -196,9 +197,10 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         thread = await database_sync_to_async(get_or_create_observed_thread)(
             session_ref, jsonl_path, provider
         )
-        if thread.host_id != self.host.id:
+        if thread.host_id != self.host.id or not (thread.metadata or {}).get("host_name"):
             thread.host = self.host
-            await database_sync_to_async(thread.save)(update_fields=["host"])
+            thread.metadata = {**(thread.metadata or {}), "host_name": self.host.name}
+            await database_sync_to_async(thread.save)(update_fields=["host", "metadata"])
         if meta:
             await database_sync_to_async(apply_session_meta)(thread, meta)
         if parsed:
@@ -316,6 +318,7 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
                         "claude_session_id": claude_session_id,
                         "cwd": cwd,
                         "tmux_session_name": None,
+                        "host_name": self.host.name,
                     },
                 },
             )
@@ -325,6 +328,7 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
                 md["claude_session_id"] = claude_session_id
                 md["cwd"] = cwd
                 md.setdefault("tmux_session_name", None)
+                md["host_name"] = self.host.name
                 thread.metadata = md
                 if thread.host_id != self.host.id:
                     thread.host = self.host
@@ -375,10 +379,10 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         )
         existing = Thread.objects.filter(external_session_ref=session_name).first()
         if existing is not None:
-            # Stamp host if not already set
-            if existing.host_id != self.host.id:
+            if existing.host_id != self.host.id or not (existing.metadata or {}).get("host_name"):
                 existing.host = self.host
-                existing.save(update_fields=["host"])
+                existing.metadata = {**(existing.metadata or {}), "host_name": self.host.name}
+                existing.save(update_fields=["host", "metadata"])
             return existing
         return Thread.objects.create(
             external_session_ref=session_name,
@@ -393,6 +397,7 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
                 "tmux_session_name": session_name,
                 "command": command,
                 "cwd": cwd,
+                "host_name": self.host.name,
             },
         )
 
