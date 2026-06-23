@@ -59,7 +59,18 @@ def _topic_name(thread) -> str:
     prov = thread.metadata.get("provider") or thread.runtime
     repo = thread.metadata.get("repo") or "?"
     title = thread.metadata.get("title") or thread.external_session_ref[:8]
-    return f"{prov} · {repo} · {title}"[:128]
+
+    # Host prefix stored in metadata — avoids FK access in async contexts.
+    host_name = (thread.metadata or {}).get("host_name")
+    prefix = f"[{host_name}] " if host_name else ""
+
+    # Mode marker: driveable (PTY/headless) vs read-only (observed JSONL).
+    if getattr(thread, "runtime_mode", None) == "observed":
+        marker = "👁 "
+    else:
+        marker = "✏️ "
+
+    return f"{prefix}{marker}{prov} · {repo} · {title}"[:128]
 
 
 def _truncate_digest(text: str) -> str:

@@ -46,6 +46,15 @@ async def edit_forum_topic(chat_id, message_thread_id, name) -> None:
         resp.raise_for_status()
 
 
+async def close_forum_topic(chat_id, message_thread_id) -> None:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+        resp = await client.post(
+            f"{_base_url()}/closeForumTopic",
+            json={"chat_id": chat_id, "message_thread_id": message_thread_id},
+        )
+        resp.raise_for_status()
+
+
 async def send_message(
     chat_id,
     text,
