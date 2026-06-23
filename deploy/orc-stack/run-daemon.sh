@@ -8,6 +8,8 @@ export PATH="$ORC_PATH_EXTRA:$PATH"
 cd "$ORC_REPO/host-agent"
 # OBSERVE_RUNTIMES defaults to claude_code; set to empty string to disable observation.
 # The recv loop (headless/inject) always runs regardless of runtimes.
+# Safety: this stack does NOT run run_session_observer — both paths delivering the
+# same sessions would double-post to Telegram. Keep it that way.
 exec "$ORC_REPO/host-agent/.venv/bin/python" -c "
 import os
 from agent_host.config import load
