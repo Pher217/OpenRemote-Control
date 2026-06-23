@@ -7,6 +7,7 @@
 #   claude               -> launches the REAL Claude inside an orc-owned tmux PTY
 #                           (Telegram input + streaming, the ✏️ topic) and attaches
 #                           you locally, so you get the normal TUI *and* remote drive.
+#                           Detach with Ctrl-b d and it keeps running (still driveable).
 #   claude <any args...> -> runs the real binary untouched (headless `-p`, `--resume`,
 #                           `mcp`, `--version`, pipes, scripts). No orc, no recursion.
 #
@@ -32,8 +33,8 @@ claude() {
     return 127
   fi
 
-  # Pass-through: any args, or a non-tty stdout (pipe / script / headless use).
-  if (( $# > 0 )) || [[ ! -t 1 ]]; then
+  # Pass-through: any args, or a non-tty stdin/stdout (pipe / script / headless use).
+  if (( $# > 0 )) || [[ ! -t 0 || ! -t 1 ]]; then
     "$real_claude" "$@"
     return
   fi
@@ -45,23 +46,39 @@ claude() {
     return
   fi
 
-  local name="claude-$(date +%H%M%S)-$$"
+  local name="claude-$(date +%H%M%S)-$$-$RANDOM"
+  local logf="${TMPDIR:-/tmp}/orc-claude-$name.log"
   print -u2 "↗ orc session '$name' — driveable from Telegram (✏️). Detach: Ctrl-b d (keeps running)."
 
   # Background the orc ws/stream loop; it lives until the tmux session ends.
-  "$ORC_HOST_BIN" run --name "$name" --cwd "$PWD" "$real_claude" >/dev/null 2>&1 &
+  "$ORC_HOST_BIN" run --name "$name" --cwd "$PWD" "$real_claude" >"$logf" 2>&1 &
   local orc_pid=$!
-  sleep 1
+
+  # Wait for the tmux session to actually come up (poll, don't blind-sleep). Bail
+  # with the log path if orc-host dies early or the session never appears.
+  local i
+  for i in {1..20}; do
+    tmux has-session -t "$name" 2>/dev/null && break
+    kill -0 "$orc_pid" 2>/dev/null \
+      || { print -u2 "claude: orc-host exited before the session started — see $logf"; return 1; }
+    sleep 0.25
+  done
+  if ! tmux has-session -t "$name" 2>/dev/null; then
+    print -u2 "claude: tmux session '$name' did not start in time — see $logf"
+    disown "$orc_pid" 2>/dev/null
+    return 1
+  fi
 
   if [[ -n "$TMUX" ]]; then
-    # Inside tmux already — don't nest-attach.
+    # Inside tmux already — don't nest-attach; hand off the session name.
     print -u2 "  (inside tmux) attach in another pane:  tmux attach -t $name"
+    disown "$orc_pid" 2>/dev/null
     return
   fi
 
-  tmux attach -t "$name" 2>/dev/null \
-    || print -u2 "claude: tmux session '$name' not ready — check 'tmux ls'"
-
-  # User exited Claude / killed the session: tidy the background loop.
-  wait "$orc_pid" 2>/dev/null
+  tmux attach -t "$name"
+  # attach returned: either the user detached (session still alive, keep it running
+  # and Telegram-driveable) or Claude exited (orc-host self-terminates on stream EOF).
+  # Either way, release the background job so the prompt returns immediately.
+  disown "$orc_pid" 2>/dev/null
 }
