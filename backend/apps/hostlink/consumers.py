@@ -232,9 +232,13 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         if thread_id is None:
             return
         thread = await database_sync_to_async(Thread.objects.get)(id=thread_id)
-        parsed = {"role": "assistant", "text": text, "session_id": session_name}
-        await record_turn(thread, "assistant", text)
-        await self._deliver_to_telegram(thread, parsed)
+        # Raw PTY frames are terminal screen redraws (box-drawing, spinners, status
+        # lines) for a TUI app like Claude — NOT clean conversation turns. Record
+        # them as debug telemetry only (source="pty_screen") and do NOT deliver to
+        # Telegram. Clean output reaches the topic exclusively via the parsed JSONL
+        # transcript (session.line / session.event), which resolves to this same
+        # thread by external_session_ref. See drive-unify spec PR 2.
+        await record_turn(thread, "assistant", text, source="pty_screen")
 
     async def _handle_pty_end(self, data: dict):
         session_name = data.get("session_name", "")
