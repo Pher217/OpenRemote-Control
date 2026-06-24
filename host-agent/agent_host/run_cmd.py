@@ -115,7 +115,12 @@ async def run_pty(cfg, command, session_name=None, cwd=None, claude_session_id=N
                     except (json.JSONDecodeError, TypeError):
                         continue
                     if isinstance(frame, dict) and frame.get("type") == "host_command":
-                        handle_host_command(frame)
+                        # This process owns exactly its own PTY session — only
+                        # inject that one, so a broadcast inject for another
+                        # session (handled by its owner) is not duplicated here.
+                        handle_host_command(
+                            frame, owns_session=lambda n: n == session_name
+                        )
 
             await asyncio.gather(_stream(), _recv())
 
