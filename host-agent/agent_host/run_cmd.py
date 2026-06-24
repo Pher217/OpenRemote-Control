@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shlex
 import sys
 import uuid
 
@@ -18,7 +20,36 @@ from agent_host.wsclient import connect_url
 log = logging.getLogger(__name__)
 
 
-async def run_pty(cfg, command, session_name=None, cwd=None):
+def ensure_claude_session_id(command: str) -> tuple[str, str | None]:
+    """Tie a `claude` PTY launch to a fixed JSONL transcript via ``--session-id``.
+
+    If *command* invokes ``claude`` without an explicit ``--session-id``, append a
+    fresh UUID so the PTY session and Claude's JSONL transcript share one id — the
+    backend keys a single canonical thread on it, so clean output (parsed from the
+    transcript) and input (tmux send-keys) land in one Telegram topic.
+
+    Returns ``(command, claude_session_id)``. Non-claude commands are returned
+    unchanged with ``None``. An explicit ``--session-id`` is honoured as-is.
+    """
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command, None
+    if not parts:
+        return command, None
+    if os.path.basename(parts[0]) != "claude":
+        return command, None
+    # Honour an explicit id in either form: `--session-id X` or `--session-id=X`.
+    for idx, part in enumerate(parts):
+        if part == "--session-id":
+            return command, (parts[idx + 1] if idx + 1 < len(parts) else None)
+        if part.startswith("--session-id="):
+            return command, (part.split("=", 1)[1] or None)
+    sid = str(uuid.uuid4())
+    return shlex.join([*parts, "--session-id", sid]), sid
+
+
+async def run_pty(cfg, command, session_name=None, cwd=None, claude_session_id=None):
     """Launch *command* in a detached tmux PTY session and stream output over WebSocket.
 
     Parameters
@@ -31,6 +62,10 @@ async def run_pty(cfg, command, session_name=None, cwd=None):
         Tmux session name.  Auto-generated if None.
     cwd:
         Working directory for the PTY session.  Defaults to tmux server default.
+    claude_session_id:
+        Claude's JSONL session UUID when the command is a `claude` launch — sent
+        in the pty_start frame so the backend can unify this PTY thread with the
+        transcript-observation thread.
     """
     if session_name is None:
         session_name = f"orc-{uuid.uuid4().hex[:8]}"
@@ -43,13 +78,16 @@ async def run_pty(cfg, command, session_name=None, cwd=None):
     try:
         async with websockets.connect(url) as ws:
             # --- pty_start frame ---
+            pty_start_data = {
+                "session_name": session_name,
+                "command": command,
+                "cwd": cwd or "",
+            }
+            if claude_session_id:
+                pty_start_data["claude_session_id"] = claude_session_id
             await ws.send(json.dumps({
                 "type": "session.pty_start",
-                "data": {
-                    "session_name": session_name,
-                    "command": command,
-                    "cwd": cwd or "",
-                },
+                "data": pty_start_data,
             }))
 
             # Run output streaming and inbound command handling concurrently so
@@ -98,4 +136,8 @@ def cmd_run(args):
         sys.exit(1)
 
     command = " ".join(args.command)
-    asyncio.run(run_pty(cfg, command, session_name=args.name, cwd=args.cwd))
+    command, claude_session_id = ensure_claude_session_id(command)
+    asyncio.run(run_pty(
+        cfg, command, session_name=args.name, cwd=args.cwd,
+        claude_session_id=claude_session_id,
+    ))
