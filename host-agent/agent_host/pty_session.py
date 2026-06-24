@@ -31,9 +31,91 @@ that only test the pure-Python safety core).
 
 from __future__ import annotations
 
+import json
+import logging
 import time
+from pathlib import Path
 
 from agent_host.input_policy import classify_input
+
+log = logging.getLogger(__name__)
+
+# Process-local registry of tmux sessions THIS process started. tmux itself does
+# not record which OS process created a session, so ownership is tracked here.
+# pty.inject is broadcast to every host ws connection in the host group (the
+# observe daemon plus each `orc run`); without an ownership check, every
+# connection runs `tmux send-keys` and the keystrokes are injected N times. The
+# owning process is the one that called start() for the session.
+#
+# Persistence (daemon only): the long-lived daemon enables a file-backed registry
+# via configure_persistence() so its session.start sessions stay injectable across
+# daemon restarts (the tmux sessions outlive the process). `orc run` does NOT
+# persist — its registry is ephemeral and dies with the (session-scoped) process.
+_started_sessions: set[str] = set()
+_persist_path: Path | None = None
+
+
+def configure_persistence(path) -> None:
+    """Enable file-backed ownership and load any previously-persisted set.
+
+    Call once at daemon startup. Idempotent-ish: re-loads from disk each call.
+    Corrupt/unreadable state fails open to an empty set (a stale name only risks
+    one harmless inject to a dead session, caught as KeyError).
+    """
+    global _persist_path
+    _persist_path = Path(path)
+    try:
+        if _persist_path.exists():
+            loaded = json.loads(_persist_path.read_text())
+            if isinstance(loaded, list):
+                _started_sessions.update(str(n) for n in loaded)
+    except Exception:
+        pass
+
+
+def _flush() -> None:
+    if _persist_path is None:
+        return
+    try:
+        _persist_path.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic replace so a crash mid-write can't corrupt the ownership file.
+        tmp = _persist_path.with_suffix(_persist_path.suffix + ".tmp")
+        tmp.write_text(json.dumps(sorted(_started_sessions)))
+        tmp.replace(_persist_path)
+    except Exception as exc:
+        # A failed flush silently degrades restart-survival of inject — surface it.
+        log.warning("pty ownership flush to %s failed: %s", _persist_path, exc)
+
+
+def mark_started(name: str) -> None:
+    """Record that this process started the tmux session *name*."""
+    _started_sessions.add(name)
+    _flush()
+
+
+def mark_stopped(name: str) -> None:
+    """Forget a session this process started (on kill / end)."""
+    _started_sessions.discard(name)
+    _flush()
+
+
+def prune_to_live(live_names) -> None:
+    """Drop owned sessions that are no longer live tmux sessions.
+
+    Called from the daemon's reconcile cycle so a session that exited naturally
+    (not via kill()) is released — preventing an unbounded stale set and the
+    name-reuse duplicate-inject footgun Codex flagged.
+    """
+    live = set(live_names)
+    stale = _started_sessions - live
+    if stale:
+        _started_sessions.difference_update(stale)
+        _flush()
+
+
+def was_started_here(name: str) -> bool:
+    """True if *name* was started by this process (eligible for inject)."""
+    return name in _started_sessions
 
 # Submit timing for a full-screen TUI (e.g. claude). The TUI ingests pasted text
 # asynchronously (char-by-char render / bracketed paste); an Enter that arrives
@@ -120,6 +202,7 @@ class PtySession:
             kwargs["start_directory"] = cwd
 
         server.new_session(**kwargs)
+        mark_started(name)
 
     def kill(self, name: str) -> None:
         """Kill the tmux session named *name*.
@@ -130,6 +213,7 @@ class PtySession:
         session = server.sessions.get(session_name=name, default=None)
         if session is not None:
             session.kill()
+        mark_stopped(name)
 
     def list_live_sessions(self) -> list[str]:
         """Names of all live tmux sessions on this host.

@@ -308,3 +308,141 @@ def test_pty_inject_without_approved_flag_is_blocked(monkeypatch):
 
     # Must not raise — PermissionError is caught internally
     handle_host_command(frame)
+
+
+# ---------------------------------------------------------------------------
+# Ownership guard — only the process that started the session may inject
+# (prevents the broadcast duplicate-inject across the host group)
+# ---------------------------------------------------------------------------
+
+
+def test_pty_inject_skipped_when_not_owned(monkeypatch):
+    """
+    GIVEN a pty.inject frame and an owns_session predicate that returns False
+          (this process did not start the session — e.g. the observe daemon
+          receiving a broadcast inject for an `orc run` session)
+    WHEN  handle_host_command is called
+    THEN  send_keys is NOT called — the owning process injects instead.
+    """
+    calls = []
+
+    class FakePtySession:
+        def send_keys(self, name, text, *, approved):
+            calls.append(name)
+
+    monkeypatch.setattr("agent_host.pty_session.PtySession", FakePtySession)
+
+    handle_host_command(
+        {
+            "type": "host_command",
+            "command": "pty.inject",
+            "session_name": "not-mine",
+            "text": "hello\n",
+            "approved": True,
+        },
+        owns_session=lambda n: False,
+    )
+
+    assert calls == []
+
+
+def test_pty_inject_runs_when_owned(monkeypatch):
+    """
+    GIVEN a pty.inject frame and an owns_session predicate that returns True
+    WHEN  handle_host_command is called
+    THEN  send_keys IS called exactly once for the owned session.
+    """
+    calls = []
+
+    class FakePtySession:
+        def send_keys(self, name, text, *, approved):
+            calls.append(name)
+
+    monkeypatch.setattr("agent_host.pty_session.PtySession", FakePtySession)
+
+    handle_host_command(
+        {
+            "type": "host_command",
+            "command": "pty.inject",
+            "session_name": "mine",
+            "text": "hello\n",
+            "approved": True,
+        },
+        owns_session=lambda n: n == "mine",
+    )
+
+    assert calls == ["mine"]
+
+
+def test_session_ownership_registry_marks_and_clears():
+    """
+    GIVEN the process-local ownership registry
+    WHEN  a session is marked started then stopped
+    THEN  was_started_here reflects ownership (True after start, False after stop).
+    """
+    from agent_host.pty_session import (
+        mark_started,
+        mark_stopped,
+        was_started_here,
+    )
+
+    name = "own-reg-test"
+    mark_stopped(name)  # ensure clean
+    assert was_started_here(name) is False
+    mark_started(name)
+    assert was_started_here(name) is True
+    mark_stopped(name)
+    assert was_started_here(name) is False
+
+
+def test_ownership_persists_across_daemon_restart(tmp_path):
+    """
+    GIVEN the daemon enabled persistence and marked a session.start session owned
+    WHEN the daemon process restarts (in-memory set lost) and reconfigures from
+         the same file
+    THEN was_started_here is True again — the session stays injectable after
+         restart (the tmux session outlived the daemon process). Fixes Codex HIGH.
+    """
+    from agent_host import pty_session as ps
+
+    ps._started_sessions.clear()
+    ps._persist_path = None
+    try:
+        path = tmp_path / "owned-sessions.json"
+        ps.configure_persistence(path)
+        ps.mark_started("daemon-sess")
+        assert ps.was_started_here("daemon-sess") is True
+
+        # Simulate daemon restart: fresh process has empty in-memory state.
+        ps._started_sessions.clear()
+        ps._persist_path = None
+        assert ps.was_started_here("daemon-sess") is False
+
+        # New daemon reloads from the same file on startup.
+        ps.configure_persistence(path)
+        assert ps.was_started_here("daemon-sess") is True
+    finally:
+        ps._started_sessions.clear()
+        ps._persist_path = None
+
+
+def test_prune_to_live_releases_exited_sessions():
+    """
+    GIVEN two owned sessions, one of which has exited (no longer a live tmux name)
+    WHEN prune_to_live runs with only the live names (the reconcile cycle)
+    THEN the exited session is released and the live one is retained — no stale
+         ownership accumulation / name-reuse duplicate. Fixes Codex MEDIUM.
+    """
+    from agent_host import pty_session as ps
+
+    ps._started_sessions.clear()
+    ps._persist_path = None
+    try:
+        ps.mark_started("alive")
+        ps.mark_started("exited")
+        ps.prune_to_live(["alive"])
+        assert ps.was_started_here("alive") is True
+        assert ps.was_started_here("exited") is False
+    finally:
+        ps._started_sessions.clear()
+        ps._persist_path = None

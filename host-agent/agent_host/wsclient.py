@@ -98,6 +98,7 @@ def handle_host_command(
     frame: dict,
     incoming_queue: asyncio.Queue | None = None,
     *,
+    owns_session: Callable[[str], bool] | None = None,
     _session_start_task_factory: Callable | None = None,
 ) -> None:
     """Default handler for inbound host_command frames from the backend.
@@ -139,6 +140,16 @@ def handle_host_command(
         if not session_name or not text:
             log.warning(
                 "host_command: pty.inject missing session_name or text — ignoring"
+            )
+            return
+        # Ownership guard: pty.inject is broadcast to every host ws connection in
+        # the host group (the daemon + each `orc run`). Only the process that
+        # started the session may inject — otherwise the keystrokes are duplicated
+        # N times. When owns_session is None (e.g. unit tests), no filtering.
+        if owns_session is not None and not owns_session(session_name):
+            log.debug(
+                "host_command: pty.inject for session %r not started here — skipping",
+                session_name,
             )
             return
         try:
@@ -332,9 +343,12 @@ def _build_reconcile_frame() -> dict | None:
     caused by an error, as that would falsely mark every session dead.
     """
     try:
-        from agent_host.pty_session import PtySession  # noqa: PLC0415
+        from agent_host.pty_session import PtySession, prune_to_live  # noqa: PLC0415
 
         names = PtySession().list_live_sessions()
+        # Release ownership of sessions that have exited (frees stale names so a
+        # reused name can't be injected by both a stale owner and the real one).
+        prune_to_live(names)
         return {"type": "session.pty_reconcile", "data": {"session_names": names}}
     except Exception:
         log.debug("pty_reconcile: enumeration failed — skipping frame this cycle")
@@ -456,7 +470,13 @@ async def run_sender(
         stop = asyncio.Event()
 
     if on_command is None:
-        on_command = handle_host_command
+        # Production daemon: only inject sessions this process started (the daemon
+        # owns session.start sessions; `orc run` sessions belong to their own
+        # process). This is what prevents duplicate injection across the host group.
+        from agent_host.pty_session import was_started_here  # noqa: PLC0415
+
+        def on_command(frame, incoming_queue):
+            handle_host_command(frame, incoming_queue, owns_session=was_started_here)
 
     # Internal queue for new events from the poll loop.
     _incoming: asyncio.Queue[dict] = asyncio.Queue()
