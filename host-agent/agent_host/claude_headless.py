@@ -10,8 +10,20 @@ import subprocess
 
 log = logging.getLogger(__name__)
 
-_CLAUDE_FALLBACK = "/Users/philippehermann/.local/bin/claude"
-_EXTRA_PATH = "/Users/philippehermann/.local/bin:/opt/homebrew/bin"
+
+def _resolve_claude_bin() -> str | None:
+    """Locate the claude binary cross-platform.
+
+    Order: explicit ``$ORC_CLAUDE_BIN`` override → PATH lookup (finds
+    ``claude`` / ``claude.cmd`` / ``claude.exe`` on Windows). The daemon's PATH
+    is augmented by run-daemon.sh (``$ORC_PATH_EXTRA``) so ``~/.local/bin`` is
+    reachable under launchd. Returns None when not found so the caller fails
+    with a clear message instead of exec'ing a hardcoded, machine-specific path.
+    """
+    override = os.environ.get("ORC_CLAUDE_BIN")
+    if override:
+        return override
+    return shutil.which("claude")
 
 
 def run_headless(
@@ -37,8 +49,10 @@ def run_headless(
     timeout:
         Hard wall-clock timeout in seconds (default 600 = 10 min).
     """
-    claude_bin = shutil.which("claude") or _CLAUDE_FALLBACK
-    env = {**os.environ, "PATH": _EXTRA_PATH + ":" + os.environ.get("PATH", "")}
+    # Bare "claude" fallback keeps this cross-platform (resolved on PATH at exec
+    # time, incl. claude.cmd/.exe on Windows) with no hardcoded machine path.
+    claude_bin = _resolve_claude_bin() or "claude"
+    env = {**os.environ}
     work_dir = cwd or os.path.expanduser("~")
 
     resume = ["--resume", claude_session_id]
@@ -83,6 +97,12 @@ def _run_once(claude_bin, prompt, session_args, work_dir, env, timeout) -> dict:
     except subprocess.TimeoutExpired:
         log.warning("claude_headless: timeout after %ds", timeout)
         return {"text": f"(headless run failed: timeout after {timeout}s)", "is_error": True}
+    except FileNotFoundError:
+        log.warning("claude_headless: claude binary not found (%r)", claude_bin)
+        return {
+            "text": "(headless run failed: 'claude' not found on PATH; set ORC_CLAUDE_BIN)",
+            "is_error": True,
+        }
     except Exception as exc:
         log.warning("claude_headless: unexpected error: %s", exc)
         return {"text": f"(headless run failed: {exc})", "is_error": True}
