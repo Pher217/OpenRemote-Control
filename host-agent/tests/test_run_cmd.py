@@ -15,7 +15,67 @@ import pytest
 
 from agent_host.config import HostConfig
 from agent_host.pty_stream import strip_ansi
-from agent_host.run_cmd import run_pty
+from agent_host.run_cmd import ensure_claude_session_id, run_pty
+
+
+# ---------------------------------------------------------------------------
+# ensure_claude_session_id tests
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_claude_session_id_appends_for_claude():
+    """
+    GIVEN a bare `claude` launch command
+    WHEN ensure_claude_session_id() is called
+    THEN it appends `--session-id <uuid>` and returns that uuid.
+    """
+    cmd, sid = ensure_claude_session_id("claude")
+    assert sid is not None
+    assert f"--session-id {sid}" in cmd
+
+
+def test_ensure_claude_session_id_handles_absolute_path():
+    """
+    GIVEN claude invoked by absolute path (as the orc-claude launcher does)
+    WHEN ensure_claude_session_id() is called
+    THEN it still recognises claude by basename and appends a session id.
+    """
+    cmd, sid = ensure_claude_session_id("/Users/x/.local/bin/claude")
+    assert sid is not None
+    assert "--session-id" in cmd
+
+
+def test_ensure_claude_session_id_skips_non_claude():
+    """
+    GIVEN a non-claude command
+    WHEN ensure_claude_session_id() is called
+    THEN the command is unchanged and the id is None.
+    """
+    cmd, sid = ensure_claude_session_id("codex --foo")
+    assert sid is None
+    assert cmd == "codex --foo"
+
+
+def test_ensure_claude_session_id_honours_explicit_id():
+    """
+    GIVEN a claude command that already specifies --session-id
+    WHEN ensure_claude_session_id() is called
+    THEN the explicit id is preserved and returned, not duplicated.
+    """
+    cmd, sid = ensure_claude_session_id("claude --session-id abc-123")
+    assert sid == "abc-123"
+    assert cmd.count("--session-id") == 1
+
+
+def test_ensure_claude_session_id_honours_explicit_equals_form():
+    """
+    GIVEN a claude command using the --session-id=<id> form
+    WHEN ensure_claude_session_id() is called
+    THEN the explicit id is preserved, not duplicated with a second flag.
+    """
+    cmd, sid = ensure_claude_session_id("claude --session-id=abc-123")
+    assert sid == "abc-123"
+    assert cmd.count("--session-id") == 1
 
 # ---------------------------------------------------------------------------
 # strip_ansi tests

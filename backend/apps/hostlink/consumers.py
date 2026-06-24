@@ -215,10 +215,11 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         session_name = data.get("session_name", "")
         command = data.get("command", "")
         cwd = data.get("cwd", "")
+        claude_session_id = data.get("claude_session_id", "")
         if not session_name:
             return
         thread = await database_sync_to_async(self._get_or_create_pty_thread)(
-            session_name, command, cwd
+            session_name, command, cwd, claude_session_id
         )
         self._pty_threads[session_name] = str(thread.id)
 
@@ -368,8 +369,18 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         await database_sync_to_async(_mark_started)()
 
-    def _get_or_create_pty_thread(self, session_name: str, command: str, cwd: str):
-        """Synchronous helper — must be called via database_sync_to_async."""
+    def _get_or_create_pty_thread(
+        self, session_name: str, command: str, cwd: str, claude_session_id: str = ""
+    ):
+        """Synchronous helper — must be called via database_sync_to_async.
+
+        Keyed by the Claude session id when present (``--session-id`` UUID), so the
+        PTY thread and the JSONL-transcript observation resolve to ONE canonical
+        thread — clean output (parsed turns) and input (``tmux send-keys``) share a
+        single Telegram topic. Falls back to the tmux session name for non-claude
+        commands. An existing thread (e.g. created first by transcript observation)
+        is upgraded to driveable PTY with its tmux session name attached.
+        """
         from apps.accounts.models import Account  # noqa: PLC0415
 
         account, _ = Account.objects.get_or_create(
@@ -377,15 +388,30 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             label="orc-run",
             defaults={"auth_type": "none", "credential_type": "none"},
         )
-        existing = Thread.objects.filter(external_session_ref=session_name).first()
+        ref = claude_session_id or session_name
+        existing = Thread.objects.filter(external_session_ref=ref).first()
         if existing is not None:
-            if existing.host_id != self.host.id or not (existing.metadata or {}).get("host_name"):
+            md = {**(existing.metadata or {})}
+            if existing.host_id != self.host.id or not md.get("host_name"):
                 existing.host = self.host
-                existing.metadata = {**(existing.metadata or {}), "host_name": self.host.name}
-                existing.save(update_fields=["host", "metadata"])
+                md["host_name"] = self.host.name
+            md["tmux_session_name"] = session_name
+            if claude_session_id:
+                md["claude_session_id"] = claude_session_id
+            existing.metadata = md
+            existing.runtime_mode = Thread.RuntimeModeChoices.PTY
+            existing.save(update_fields=["host", "metadata", "runtime_mode"])
             return existing
+        metadata = {
+            "tmux_session_name": session_name,
+            "command": command,
+            "cwd": cwd,
+            "host_name": self.host.name,
+        }
+        if claude_session_id:
+            metadata["claude_session_id"] = claude_session_id
         return Thread.objects.create(
-            external_session_ref=session_name,
+            external_session_ref=ref,
             name=f"orc-run: {command[:80]}",
             runtime="pty",
             runtime_mode=Thread.RuntimeModeChoices.PTY,
@@ -393,12 +419,7 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             account=account,
             status=Thread.StatusChoices.RUNNING,
             started_at=timezone.now(),
-            metadata={
-                "tmux_session_name": session_name,
-                "command": command,
-                "cwd": cwd,
-                "host_name": self.host.name,
-            },
+            metadata=metadata,
         )
 
     async def _deliver_to_telegram(self, thread, parsed):

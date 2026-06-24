@@ -66,6 +66,76 @@ class TestPtyFrameHandling:
         thread = await sync_to_async(Thread.objects.get)(id=thread_id)
         assert thread.external_session_ref == "orc-reg-xyz"
 
+    async def test_pty_start_keys_thread_by_claude_session_id(self):
+        """
+        GIVEN a pty_start frame carrying a claude_session_id (the --session-id UUID)
+        WHEN handled
+        THEN the Thread is keyed by that UUID (not the tmux name) and the tmux
+             session name is stored in metadata for input.
+        """
+        host = await sync_to_async(Host.objects.create)(slug="pty-host-sid", os="linux")
+        consumer = _make_pty_consumer(host)
+
+        await consumer._handle_pty_start({
+            "session_name": "remote",
+            "command": "claude --session-id 11111111-1111-1111-1111-111111111111",
+            "cwd": "/tmp",
+            "claude_session_id": "11111111-1111-1111-1111-111111111111",
+        })
+
+        thread = await sync_to_async(
+            lambda: Thread.objects.filter(
+                external_session_ref="11111111-1111-1111-1111-111111111111"
+            ).first()
+        )()
+        assert thread is not None
+        assert thread.metadata["tmux_session_name"] == "remote"
+        assert thread.metadata["claude_session_id"] == "11111111-1111-1111-1111-111111111111"
+        assert thread.runtime_mode == Thread.RuntimeModeChoices.PTY
+
+    async def test_pty_start_upgrades_existing_observed_thread(self):
+        """
+        GIVEN a thread already created by transcript observation, keyed by the
+              claude session UUID, with no tmux session name (read-only observed)
+        WHEN a pty_start frame arrives for the same UUID
+        THEN the existing thread is upgraded to driveable PTY with the tmux name
+             attached — one canonical thread, not a duplicate.
+        """
+        from apps.accounts.models import Account
+
+        host = await sync_to_async(Host.objects.create)(slug="pty-host-up", os="linux")
+        consumer = _make_pty_consumer(host)
+        account = await sync_to_async(Account.objects.create)(
+            provider="claude_code", label="observer",
+            auth_type="none", credential_type="none",
+        )
+        sid = "22222222-2222-2222-2222-222222222222"
+        observed = await sync_to_async(Thread.objects.create)(
+            external_session_ref=sid,
+            name="observed claude",
+            runtime="claude_code",
+            runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+            account=account,
+            status=Thread.StatusChoices.RUNNING,
+            metadata={},
+        )
+
+        await consumer._handle_pty_start({
+            "session_name": "remote2",
+            "command": f"claude --session-id {sid}",
+            "cwd": "/tmp",
+            "claude_session_id": sid,
+        })
+
+        count = await sync_to_async(
+            lambda: Thread.objects.filter(external_session_ref=sid).count()
+        )()
+        assert count == 1
+        await sync_to_async(observed.refresh_from_db)()
+        assert observed.runtime_mode == Thread.RuntimeModeChoices.PTY
+        assert observed.metadata["tmux_session_name"] == "remote2"
+        assert observed.host_id == host.id
+
     async def test_pty_output_creates_message_and_delivers(self, monkeypatch):
         """
         GIVEN a PTY thread registered via pty_start
