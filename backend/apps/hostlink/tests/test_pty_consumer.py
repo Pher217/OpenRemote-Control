@@ -136,11 +136,13 @@ class TestPtyFrameHandling:
         assert observed.metadata["tmux_session_name"] == "remote2"
         assert observed.host_id == host.id
 
-    async def test_pty_output_creates_message_and_delivers(self, monkeypatch):
+    async def test_pty_output_records_debug_and_does_not_deliver(self, monkeypatch):
         """
         GIVEN a PTY thread registered via pty_start
-        WHEN a session.pty_output frame arrives
-        THEN a Message is persisted and deliver_turn is called.
+        WHEN a session.pty_output frame arrives (raw TUI screen frame)
+        THEN it is persisted as debug telemetry (metadata.source="pty_screen") and
+             is NOT delivered to Telegram — clean output comes only from the JSONL
+             transcript path. (drive-unify PR 2)
         """
         delivery_calls = []
 
@@ -166,22 +168,63 @@ class TestPtyFrameHandling:
                 "text": "hello from PTY",
             })
 
-        # Message persisted
+        # Message persisted, tagged as pty_screen debug telemetry
         from apps.threads.models import Message
         thread_id = consumer._pty_threads.get("orc-out-001")
         msgs = await sync_to_async(
             lambda: list(
                 Message.objects.filter(thread_id=thread_id).values_list(
-                    "redacted_content", flat=True
+                    "redacted_content", "metadata"
                 )
             )
         )()
-        assert "hello from PTY" in msgs
+        assert ("hello from PTY", {"source": "pty_screen"}) in msgs
 
-        # Delivery called
-        assert len(delivery_calls) == 1
-        assert delivery_calls[0][0]["text"] == "hello from PTY"
-        assert delivery_calls[0][1] == -100888
+        # Telegram delivery NOT called for raw PTY frames
+        assert delivery_calls == []
+
+    async def test_jsonl_turn_attaches_to_pty_thread_and_delivers(self, monkeypatch):
+        """
+        GIVEN a driveable PTY thread keyed by a claude session UUID
+        WHEN a clean JSONL turn (session.event) arrives for that same UUID
+        THEN it attaches to the SAME thread (no duplicate) and IS delivered to
+             Telegram — clean output and input share one topic. (drive-unify PR 2)
+        """
+        delivery_calls = []
+
+        async def fake_deliver(thread, parsed, msg, *, forum_chat_id):
+            delivery_calls.append((str(thread.id), parsed["text"]))
+
+        monkeypatch.setattr(consumers, "deliver_turn", fake_deliver)
+
+        host = await sync_to_async(Host.objects.create)(slug="pty-host-uni", os="linux")
+        consumer = _make_pty_consumer(host)
+        sid = "33333333-3333-3333-3333-333333333333"
+
+        await consumer._handle_pty_start({
+            "session_name": "remote-uni",
+            "command": f"claude --session-id {sid}",
+            "cwd": "/tmp",
+            "claude_session_id": sid,
+        })
+        pty_thread_id = consumer._pty_threads["remote-uni"]
+
+        with override_settings(TELEGRAM_FORUM_CHAT_ID="-100999"):
+            await consumer._handle_session_event({
+                "session_id": sid,
+                "jsonl_path": f"/x/{sid}.jsonl",
+                "provider": "claude_code",
+                "role": "assistant",
+                "text": "the real answer",
+            })
+
+        # Same thread, no duplicate
+        total = await sync_to_async(
+            lambda: Thread.objects.filter(external_session_ref=sid).count()
+        )()
+        assert total == 1
+        # Clean turn delivered, attributed to the unified PTY thread
+        assert delivery_calls == [(pty_thread_id, "the real answer")]
 
     async def test_pty_end_marks_thread_completed(self):
         """

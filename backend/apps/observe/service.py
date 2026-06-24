@@ -57,7 +57,7 @@ def apply_session_meta(thread, meta) -> bool:
 
 
 @database_sync_to_async
-def record_turn(thread, role, text) -> Message:
+def record_turn(thread, role, text, source=None) -> Message:
     nxt = (
         Message.objects.filter(thread=thread)
         .order_by("-sequence")
@@ -70,5 +70,5 @@ def record_turn(thread, role, text) -> Message:
         role=role if role in {"user", "assistant"} else "system",
         redacted_content=text,
         sequence=nxt,
-        metadata={},
+        metadata={"source": source} if source else {},
     )
