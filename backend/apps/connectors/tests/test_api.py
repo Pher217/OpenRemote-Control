@@ -127,6 +127,38 @@ class TestStart:
         assert str(instance.thread_id) == response.data["thread_id"]
         assert instance.thread.name == "Nightly deploy"
 
+    def test_start_creates_driveable_headless_session_when_host_enrolled(self, client, with_token):
+        """
+        GIVEN a host daemon is enrolled
+        WHEN POST /start dispatches a session
+        THEN the thread is DRIVEABLE (headless metadata + bound host + PTY mode +
+             claude_session_id + cwd), so a typed reply routes to `claude -p` —
+             never a read-only chat. (chats-must-be-write-and-stream requirement)
+        """
+        from apps.hosts.models import Host
+        from apps.threads.models import Thread
+
+        Host.objects.create(slug="drv-host", name="DrvHost", os="darwin")
+        response = client.post(
+            f"{BASE}/start",
+            {
+                "connector_id": "conn-drv",
+                "tool": "claude",
+                "workspace_root": "/home/user/proj",
+                "name": "Work",
+            },
+            format="json",
+            **AUTH,
+        )
+        assert response.status_code == 201
+        t = Thread.objects.get(id=response.data["thread_id"])
+        md = t.metadata or {}
+        assert t.host_id is not None
+        assert md.get("headless") is True
+        assert md.get("cwd") == "/home/user/proj"
+        assert md.get("claude_session_id")
+        assert t.runtime_mode == Thread.RuntimeModeChoices.PTY
+
     def test_start_rebinds_existing_connector_to_new_thread(self, client, with_token):
         """
         GIVEN a connector already bound to a thread (via /notify)

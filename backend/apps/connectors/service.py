@@ -7,6 +7,7 @@ Best-effort delivery is attempted to the active messaging platform.
 
 import logging
 import os
+import uuid
 
 from asgiref.sync import async_to_sync
 from django.db.models import Max
@@ -249,12 +250,36 @@ def start_session(
 
     session_name = _compose_session_name(tool, workspace_root, name)
 
-    thread = Thread.objects.create(
-        name=session_name,
-        runtime=tool or "connector",
-        runtime_mode=Thread.RuntimeModeChoices.API,
-        account=account,
-    )
+    # The dispatched chat must be DRIVEABLE (write + stream), never read-only:
+    # bind it to the host daemon as a headless `claude` session so a typed reply
+    # in the topic routes to `claude -p --session-id/--resume` in the workspace,
+    # and the reply streams back into the same topic. Single-host local deploy
+    # binds to the sole enrolled host. If no host is enrolled we cannot drive, so
+    # fall back to a read-only API thread (and the operator is told to enrol a host).
+    from apps.hosts.models import Host  # noqa: PLC0415 — avoid app-load cycle
+
+    host = Host.objects.first()
+    if host is not None:
+        thread = Thread.objects.create(
+            name=session_name,
+            runtime=tool or "claude",
+            runtime_mode=Thread.RuntimeModeChoices.PTY,
+            account=account,
+            host=host,
+            metadata={
+                "headless": True,
+                "claude_session_id": str(uuid.uuid4()),
+                "cwd": workspace_root or "",
+                "host_name": host.name,
+            },
+        )
+    else:
+        thread = Thread.objects.create(
+            name=session_name,
+            runtime=tool or "connector",
+            runtime_mode=Thread.RuntimeModeChoices.API,
+            account=account,
+        )
 
     instance = ConnectorInstance.objects.filter(connector_id=connector_id).first()
     if instance is None:
