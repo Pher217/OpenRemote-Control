@@ -6,6 +6,7 @@ Best-effort delivery is attempted to the active messaging platform.
 """
 
 import logging
+import os
 
 from asgiref.sync import async_to_sync
 from django.db.models import Max
@@ -198,6 +199,34 @@ def _ensure_session_topic(thread, session_name: str) -> None:
         logger.exception("start_session: topic creation failed; falling back to broadcast")
         _broadcast_text(f"🎮 Remote-control session started: {session_name}")
 
+def _compose_session_name(tool: str, workspace_root: str, name: str) -> str:
+    """Readable session name.
+
+    An explicit operator-supplied *name* is used verbatim (their choice). When no
+    name is given (the bare ``/openremote-control`` dispatch), auto-compose
+    ``agent · repo · time``:
+    - agent: the coding tool (claude/codex/…); falls back to ``session`` when the
+      connector reported none (orc-mcp sends ``unknown`` when ``$ORC_TOOL`` is unset).
+    - repo: basename of the workspace root the agent is running in.
+    - time: a timestamp, so two un-named sessions in the same repo don't collide.
+    """
+    title = (name or "").strip()
+    if title:
+        return title[:255]
+    agent = (tool or "").strip()
+    if not agent or agent == "unknown":
+        agent = "session"
+    # Normalize Windows separators so basename works cross-platform on this POSIX
+    # backend (else "C:\\Users\\x\\Repo" would leak the whole path into the name).
+    norm = (workspace_root or "").strip().replace("\\", "/").rstrip("/")
+    repo = os.path.basename(norm)
+    parts = [agent]
+    if repo:
+        parts.append(repo)
+    parts.append(f"{timezone.now():%Y-%m-%d %H:%M}")
+    return " · ".join(parts)[:255]
+
+
 def start_session(
     connector_id: str,
     tool: str,
@@ -218,7 +247,7 @@ def start_session(
         defaults={"auth_type": "none", "credential_type": "none"},
     )
 
-    session_name = (name or "").strip() or f"{tool or 'session'} {timezone.now():%Y-%m-%d %H:%M}"
+    session_name = _compose_session_name(tool, workspace_root, name)
 
     thread = Thread.objects.create(
         name=session_name,
