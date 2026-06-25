@@ -1,5 +1,7 @@
 """Tests for PTY frame handling in HostDaemonConsumer."""
 
+import asyncio
+
 import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
@@ -15,7 +17,17 @@ def _make_pty_consumer(host):
     c.host = host
     c._file_sessions = {}
     c._pty_threads = {}
+    # Delivery is offloaded to a background drainer (started in connect()); tests
+    # set the queue directly and drain it explicitly.
+    c._delivery_queue = asyncio.Queue(maxsize=2000)
     return c
+
+
+async def _drain(consumer, forum_chat_id):
+    """Process the background delivery queue synchronously (drainer is off-loop in prod)."""
+    while not consumer._delivery_queue.empty():
+        thread, parsed = consumer._delivery_queue.get_nowait()
+        await consumers.deliver_turn(thread, parsed, None, forum_chat_id=forum_chat_id)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -217,6 +229,8 @@ class TestPtyFrameHandling:
                 "role": "assistant",
                 "text": "the real answer",
             })
+            # Turn is enqueued; the drainer is what calls deliver_turn.
+            await _drain(consumer, -100999)
 
         # Same thread, no duplicate
         total = await sync_to_async(

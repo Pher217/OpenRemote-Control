@@ -4,6 +4,7 @@ Authenticates the daemon via per-host token and HMAC-signed nonce, then relays
 backend commands and PTY streams while ingesting observed session events and
 lines back into the local thread/telegram pipeline.
 """
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -28,6 +29,15 @@ from apps.telegram.telegram_api import redact_token
 from apps.threads.models import Thread
 
 logger = logging.getLogger(__name__)
+
+# Telegram delivery is offloaded to a per-connection background drainer so a slow
+# or rate-limited (429) send never blocks the receive loop — blocking it starves
+# the host-heartbeat echo and drops the daemon ws (the "streaming stalls then
+# reconnects every 90s" bug). The drainer throttles sends to stay under Telegram's
+# per-chat rate limit; the queue is bounded and drops oldest under sustained burst
+# (turns are already persisted via record_turn — the daemon re-sends on reconnect).
+_DELIVERY_QUEUE_MAX = 2000
+_DELIVERY_MIN_INTERVAL = 0.5  # seconds between Telegram sends per connection
 
 
 class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
@@ -97,10 +107,16 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         self._file_sessions: dict[str, str] = {}
         # Per-PTY-session thread id cache: session_name -> str(thread.id)
         self._pty_threads: dict[str, str] = {}
+        # Background Telegram delivery queue + drainer (see module note).
+        self._delivery_queue: asyncio.Queue = asyncio.Queue(maxsize=_DELIVERY_QUEUE_MAX)
+        self._delivery_task = asyncio.create_task(self._delivery_drainer())
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):
+        task = getattr(self, "_delivery_task", None)
+        if task is not None:
+            task.cancel()
         if getattr(self, "group_name", None):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
@@ -427,28 +443,54 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         )
 
     async def _deliver_to_telegram(self, thread, parsed):
-        """Forward an observed turn from a remote host to the Telegram forum.
+        """Enqueue a turn for throttled, non-blocking Telegram delivery.
 
-        Mirrors the local run_session_observer delivery path so multi-host
-        sessions surface in the same inbox. Uses TELEGRAM_FORUM_CHAT_ID (the
-        same setting the observer uses) so both paths route to one forum.
-        Best-effort: delivery failures must never break transcript ingestion.
-
-        Note: do NOT run run_session_observer on the same machine that connects
-        a host daemon for the same sessions — both paths would deliver every
-        turn, posting each twice.
+        Offloaded to the background drainer (see module note) so a slow or
+        rate-limited Telegram call never blocks the receive loop / heartbeat.
+        Best-effort: under a sustained burst the oldest pending turn is dropped
+        (it is already persisted via record_turn; the daemon re-sends on
+        reconnect). Synchronous and fast — never awaits a network call.
         """
-        forum_chat_id = getattr(settings, "TELEGRAM_FORUM_CHAT_ID", "")
-        if not forum_chat_id:
+        if not getattr(settings, "TELEGRAM_FORUM_CHAT_ID", ""):
+            return
+        queue = getattr(self, "_delivery_queue", None)
+        if queue is None:
             return
         try:
-            await deliver_turn(
-                thread, parsed, None, forum_chat_id=int(forum_chat_id)
-            )
-        except Exception as exc:  # noqa: BLE001 — best-effort, never break ingestion
-            logger.warning(
-                "hostlink: telegram delivery failed: %s", redact_token(str(exc))
-            )
+            queue.put_nowait((thread, parsed))
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()  # drop oldest, make room for the newest turn
+                queue.task_done()
+                queue.put_nowait((thread, parsed))
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
+
+    async def _delivery_drainer(self) -> None:
+        """Serialize Telegram deliveries off the receive loop, throttled.
+
+        One send at a time with a fixed inter-send delay keeps us under
+        Telegram's per-chat rate limit; individual 429s are handled (with
+        retry_after backoff) inside telegram_api.send_message.
+        """
+        forum_chat_id_raw = getattr(settings, "TELEGRAM_FORUM_CHAT_ID", "")
+        if not forum_chat_id_raw:
+            return
+        try:
+            forum_chat_id = int(forum_chat_id_raw)
+        except (TypeError, ValueError):
+            return
+        while True:
+            thread, parsed = await self._delivery_queue.get()
+            try:
+                await deliver_turn(thread, parsed, None, forum_chat_id=forum_chat_id)
+            except Exception as exc:  # noqa: BLE001 — best-effort, never crash the drainer
+                logger.warning(
+                    "hostlink: telegram delivery failed: %s", redact_token(str(exc))
+                )
+            finally:
+                self._delivery_queue.task_done()
+            await asyncio.sleep(_DELIVERY_MIN_INTERVAL)
 
     # Group handler for future downstream commands sent via channel_layer.group_send.
     async def host_command(self, event):

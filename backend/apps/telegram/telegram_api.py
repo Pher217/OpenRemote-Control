@@ -3,8 +3,13 @@
 Provides helpers to send/edit/pin messages, manage forum topics, answer
 callback queries, poll updates, and redact the bot token from logs.
 """
+import asyncio
+
 import httpx
 from django.conf import settings
+
+# Cap how long a single send will wait out a Telegram 429 retry_after.
+_MAX_RETRY_AFTER = 30.0
 
 FORUM_ICON_COLORS = [0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F]
 
@@ -73,15 +78,28 @@ async def send_message(
     if disable_notification is not None:
         payload["disable_notification"] = disable_notification
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-        resp = await client.post(
-            f"{_base_url()}/sendMessage",
-            json=payload,
-        )
-        resp.raise_for_status()
-        try:
-            return resp.json()["result"]["message_id"]
-        except Exception:
-            return None
+        for attempt in range(2):
+            resp = await client.post(
+                f"{_base_url()}/sendMessage",
+                json=payload,
+            )
+            # Telegram 429: respect retry_after, then retry once. The caller
+            # (hostlink drainer) is off the receive loop, so this wait never
+            # starves the host heartbeat.
+            if resp.status_code == 429 and attempt == 0:
+                retry_after = 1.0
+                try:
+                    retry_after = float(resp.json()["parameters"]["retry_after"])
+                except Exception:
+                    pass
+                await asyncio.sleep(min(retry_after, _MAX_RETRY_AFTER))
+                continue
+            resp.raise_for_status()
+            try:
+                return resp.json()["result"]["message_id"]
+            except Exception:
+                return None
+        return None
 
 
 async def edit_message_text(
