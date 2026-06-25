@@ -159,6 +159,30 @@ class TestStart:
         assert md.get("claude_session_id")
         assert t.runtime_mode == Thread.RuntimeModeChoices.PTY
 
+    def test_start_falls_back_to_readonly_when_host_ambiguous(self, client, with_token):
+        """
+        GIVEN more than one enrolled host (can't tell which machine the workspace is on)
+        WHEN POST /start dispatches a session
+        THEN it does NOT guess a host — the thread is the read-only API fallback,
+             never bound to (and executable on) the wrong machine.
+        """
+        from apps.hosts.models import Host
+        from apps.threads.models import Thread
+
+        Host.objects.create(slug="h-a", name="HostA", os="darwin")
+        Host.objects.create(slug="h-b", name="HostB", os="linux")
+        response = client.post(
+            f"{BASE}/start",
+            {"connector_id": "conn-amb", "tool": "claude", "workspace_root": "/x", "name": "Amb"},
+            format="json",
+            **AUTH,
+        )
+        assert response.status_code == 201
+        t = Thread.objects.get(id=response.data["thread_id"])
+        assert t.host_id is None
+        assert (t.metadata or {}).get("headless") is not True
+        assert t.runtime_mode == Thread.RuntimeModeChoices.API
+
     def test_start_rebinds_existing_connector_to_new_thread(self, client, with_token):
         """
         GIVEN a connector already bound to a thread (via /notify)

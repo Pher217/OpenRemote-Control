@@ -258,7 +258,19 @@ def start_session(
     # fall back to a read-only API thread (and the operator is told to enrol a host).
     from apps.hosts.models import Host  # noqa: PLC0415 — avoid app-load cycle
 
-    host = Host.objects.first()
+    # Only auto-bind to a host when it is UNAMBIGUOUS (single enrolled host — the
+    # common local single-host deploy). With multiple hosts we cannot tell which
+    # machine `workspace_root` lives on (the connector sends no host proof), so we
+    # must NOT guess — binding the wrong host would run `claude -p` in the wrong
+    # filesystem. Multi-host driveability needs a host hint/proof from the daemon
+    # (follow-up); until then multi-host falls back to read-only.
+    # SECURITY NOTE: a driveable thread lets an operator-gated Telegram reply run
+    # `claude -p --permission-mode bypassPermissions` in `cwd`. Replies are gated by
+    # the TELEGRAM allowlist (handle_forum_reply), but a multi-tenant deployment
+    # should add a per-connector "drive" scope before enabling this. Acceptable for
+    # the single-user local deploy this targets.
+    hosts = list(Host.objects.all()[:2])
+    host = hosts[0] if len(hosts) == 1 else None
     if host is not None:
         thread = Thread.objects.create(
             name=session_name,
