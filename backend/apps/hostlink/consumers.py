@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 # (turns are already persisted via record_turn — the daemon re-sends on reconnect).
 _DELIVERY_QUEUE_MAX = 2000
 _DELIVERY_MIN_INTERVAL = 0.5  # seconds between Telegram sends per connection
+_DRAINER_STOP = object()  # sentinel: tells the drainer to drain + exit on disconnect
 
 
 class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
@@ -109,13 +110,40 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         self._pty_threads: dict[str, str] = {}
         # Background Telegram delivery queue + drainer (see module note).
         self._delivery_queue: asyncio.Queue = asyncio.Queue(maxsize=_DELIVERY_QUEUE_MAX)
+        self._closing = False
         self._delivery_task = asyncio.create_task(self._delivery_drainer())
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):
+        # Drain pending deliveries before tearing down so already-recorded
+        # turns/intros aren't lost when a short-lived control ws (`orc-host
+        # headless` registration) or a churning daemon ws closes mid-stream
+        # (the "input worked but no reply showed up" bug).
+        #
+        # Cooperative shutdown, NOT cancel-then-flush: cancelling could abort an
+        # in-flight deliver_turn whose item was already dequeued (lost turn).
+        # Instead signal close (the drainer skips its throttle) and push a STOP
+        # sentinel; the drainer finishes the in-flight send, drains the rest fast,
+        # and exits. We await it (bounded), only cancelling as a last resort.
+        self._closing = True
+        queue = getattr(self, "_delivery_queue", None)
         task = getattr(self, "_delivery_task", None)
-        if task is not None:
+        if queue is not None and task is not None:
+            try:
+                queue.put_nowait(_DRAINER_STOP)
+            except asyncio.QueueFull:
+                try:  # make room for the sentinel
+                    queue.get_nowait()
+                    queue.task_done()
+                    queue.put_nowait(_DRAINER_STOP)
+                except Exception:  # noqa: BLE001
+                    task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+            except (TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001
+                task.cancel()
+        elif task is not None:
             task.cancel()
         if getattr(self, "group_name", None):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
@@ -471,7 +499,10 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         One send at a time with a fixed inter-send delay keeps us under
         Telegram's per-chat rate limit; individual 429s are handled (with
-        retry_after backoff) inside telegram_api.send_message.
+        retry_after backoff) inside telegram_api.send_message. On disconnect a
+        _DRAINER_STOP sentinel makes it drain the remainder (without throttle,
+        since self._closing is set) and exit cleanly — so no in-flight turn is
+        lost to task cancellation.
         """
         forum_chat_id_raw = getattr(settings, "TELEGRAM_FORUM_CHAT_ID", "")
         if not forum_chat_id_raw:
@@ -481,7 +512,11 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         except (TypeError, ValueError):
             return
         while True:
-            thread, parsed = await self._delivery_queue.get()
+            item = await self._delivery_queue.get()
+            if item is _DRAINER_STOP:
+                self._delivery_queue.task_done()
+                return
+            thread, parsed = item
             try:
                 await deliver_turn(thread, parsed, None, forum_chat_id=forum_chat_id)
             except Exception as exc:  # noqa: BLE001 — best-effort, never crash the drainer
@@ -490,7 +525,8 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
                 )
             finally:
                 self._delivery_queue.task_done()
-            await asyncio.sleep(_DELIVERY_MIN_INTERVAL)
+            if not getattr(self, "_closing", False):
+                await asyncio.sleep(_DELIVERY_MIN_INTERVAL)
 
     # Group handler for future downstream commands sent via channel_layer.group_send.
     async def host_command(self, event):

@@ -143,3 +143,33 @@ async def test_deliver_queue_drops_oldest_when_full():
     _, first = consumer._delivery_queue.get_nowait()
     _, second = consumer._delivery_queue.get_nowait()
     assert [first["text"], second["text"]] == ["middle", "newest"]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(TELEGRAM_FORUM_CHAT_ID="-100999")
+async def test_disconnect_drains_pending_deliveries(monkeypatch):
+    """
+    GIVEN a turn enqueued with the drainer actually running (production path)
+    WHEN the consumer disconnects
+    THEN the pending turn is still delivered via cooperative shutdown — not lost
+         to task cancellation. (Codex HIGH: in-flight item must not be dropped.)
+    """
+    calls = []
+
+    async def fake_deliver(thread, parsed, msg, *, forum_chat_id):
+        calls.append((parsed["text"], forum_chat_id))
+
+    monkeypatch.setattr(consumers, "deliver_turn", fake_deliver)
+    host = await sync_to_async(Host.objects.create)(slug="flush1", os="linux")
+    consumer = _make_consumer(host)
+    consumer._closing = False
+    # Start the real drainer, exactly as connect() does.
+    consumer._delivery_task = asyncio.create_task(consumer._delivery_drainer())
+
+    await consumer._deliver_to_telegram(object(), {"role": "assistant", "text": "intro"})
+
+    await consumer.disconnect(1000)
+
+    assert calls == [("intro", -100999)]
+    assert consumer._delivery_queue.empty()
