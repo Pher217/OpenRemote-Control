@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
@@ -11,7 +13,17 @@ def _make_consumer(host):
     c = HostDaemonConsumer()
     c.host = host
     c._file_sessions = {}
+    # Delivery is offloaded to a background drainer (started in connect()); tests
+    # set the queue directly and drain it explicitly via _drain().
+    c._delivery_queue = asyncio.Queue(maxsize=2000)
     return c
+
+
+async def _drain(consumer, forum_chat_id):
+    """Process the background delivery queue synchronously (drainer is off-loop in prod)."""
+    while not consumer._delivery_queue.empty():
+        thread, parsed = consumer._delivery_queue.get_nowait()
+        await consumers.deliver_turn(thread, parsed, None, forum_chat_id=forum_chat_id)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -42,6 +54,8 @@ async def test_session_event_delivers_to_telegram(monkeypatch):
             "text": "hello from windows",
         }
     )
+    # The turn is enqueued (non-blocking); the drainer is what calls deliver_turn.
+    await _drain(consumer, -100999)
 
     assert len(calls) == 1
     parsed, forum_chat_id = calls[0]
@@ -80,3 +94,52 @@ async def test_no_delivery_when_forum_unset(monkeypatch):
     )
 
     assert calls == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(TELEGRAM_FORUM_CHAT_ID="-100999")
+async def test_deliver_to_telegram_is_non_blocking(monkeypatch):
+    """
+    GIVEN a turn to deliver
+    WHEN _deliver_to_telegram is called
+    THEN it enqueues WITHOUT awaiting deliver_turn (so a slow/429 send can never
+         block the receive loop / starve the host heartbeat).
+    """
+    inline_calls = []
+
+    async def fake_deliver(*a, **k):
+        inline_calls.append(1)
+
+    monkeypatch.setattr(consumers, "deliver_turn", fake_deliver)
+    host = await sync_to_async(Host.objects.create)(slug="nb1", os="linux")
+    consumer = _make_consumer(host)
+
+    await consumer._deliver_to_telegram(object(), {"role": "assistant", "text": "x"})
+
+    assert inline_calls == []  # NOT delivered inline
+    assert consumer._delivery_queue.qsize() == 1  # enqueued for the drainer
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@override_settings(TELEGRAM_FORUM_CHAT_ID="-100999")
+async def test_deliver_queue_drops_oldest_when_full():
+    """
+    GIVEN the bounded delivery queue is full
+    WHEN another turn is enqueued
+    THEN the oldest pending turn is dropped to make room for the newest (the turn
+         is already persisted; the daemon re-sends on reconnect).
+    """
+    host = await sync_to_async(Host.objects.create)(slug="nb2", os="linux")
+    consumer = _make_consumer(host)
+    consumer._delivery_queue = asyncio.Queue(maxsize=2)
+
+    await consumer._deliver_to_telegram(object(), {"text": "oldest"})
+    await consumer._deliver_to_telegram(object(), {"text": "middle"})
+    await consumer._deliver_to_telegram(object(), {"text": "newest"})  # evicts "oldest"
+
+    assert consumer._delivery_queue.qsize() == 2
+    _, first = consumer._delivery_queue.get_nowait()
+    _, second = consumer._delivery_queue.get_nowait()
+    assert [first["text"], second["text"]] == ["middle", "newest"]
