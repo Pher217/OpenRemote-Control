@@ -222,3 +222,55 @@ def test_is_error_true_in_result_json_propagates():
 
     assert result["is_error"] is True
     assert result["text"] == "Claude error message"
+
+
+# ---------------------------------------------------------------------------
+# Cross-platform binary resolution (headless-default spec)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_claude_bin_honors_env_override(monkeypatch):
+    """
+    GIVEN $ORC_CLAUDE_BIN is set
+    WHEN  _resolve_claude_bin is called
+    THEN  it returns that path verbatim (no PATH lookup) — cross-platform escape hatch.
+    """
+    from agent_host.claude_headless import _resolve_claude_bin
+
+    monkeypatch.setenv("ORC_CLAUDE_BIN", "/custom/path/claude.exe")
+    assert _resolve_claude_bin() == "/custom/path/claude.exe"
+
+
+def test_resolve_claude_bin_falls_back_to_path(monkeypatch):
+    """
+    GIVEN no override
+    WHEN  _resolve_claude_bin is called
+    THEN  it uses shutil.which (finds claude / claude.cmd / claude.exe on PATH).
+    """
+    from agent_host import claude_headless
+
+    monkeypatch.delenv("ORC_CLAUDE_BIN", raising=False)
+    monkeypatch.setattr(claude_headless.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert claude_headless._resolve_claude_bin() == "/usr/bin/claude"
+
+
+def test_missing_binary_returns_clear_error_not_crash(monkeypatch):
+    """
+    GIVEN claude is not installed (exec raises FileNotFoundError)
+    WHEN  run_headless is called
+    THEN  it returns a clear is_error result mentioning ORC_CLAUDE_BIN — never raises,
+          never exec's a hardcoded machine-specific path.
+    """
+    from agent_host import claude_headless
+
+    monkeypatch.delenv("ORC_CLAUDE_BIN", raising=False)
+    monkeypatch.setattr(claude_headless.shutil, "which", lambda name: None)
+
+    def _boom(*a, **k):
+        raise FileNotFoundError("no claude")
+
+    with patch("subprocess.run", side_effect=_boom):
+        result = run_headless("hi", "aaaaaaaa-0000-0000-0000-000000000099", cwd="", started=False)
+
+    assert result["is_error"] is True
+    assert "ORC_CLAUDE_BIN" in result["text"]
