@@ -97,9 +97,11 @@ def _save_topic_id(thread, topic_id, color, forum_chat_id) -> None:
 
 
 @database_sync_to_async
-def _save_digest_state(thread, digest_message_id, digest_steps) -> None:
+def _save_digest_state(thread, digest_message_id, digest_steps, digest_text=None) -> None:
     thread.metadata["telegram_digest_message_id"] = digest_message_id
     thread.metadata["telegram_digest_steps"] = digest_steps
+    if digest_text is not None:
+        thread.metadata["telegram_digest_text"] = digest_text
     thread.save(update_fields=["metadata"])
 
 
@@ -107,6 +109,7 @@ def _save_digest_state(thread, digest_message_id, digest_steps) -> None:
 def _clear_digest_state(thread) -> None:
     thread.metadata.pop("telegram_digest_message_id", None)
     thread.metadata.pop("telegram_digest_steps", None)
+    thread.metadata.pop("telegram_digest_text", None)
     thread.save(update_fields=["metadata"])
 
 
@@ -232,64 +235,47 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
         await _clear_digest_state(thread)
     digest_msg_id = thread.metadata.get("telegram_digest_message_id")
     digest_steps = thread.metadata.get("telegram_digest_steps", 0)
+    acc = thread.metadata.get("telegram_digest_text", "")
+
+    # Accumulate each streamed step so the operator watches the work BUILD UP — a
+    # growing transcript (🔧 tool steps then the answer) — instead of the message
+    # flashing to only the latest step. Plain text (no HTML) keeps the accreting
+    # transcript escaping-safe.
+    label = settings.TELEGRAM_ASSISTANT_LABEL
+    step_line = _truncate_digest(parsed["text"])
+    acc = f"{acc}\n{step_line}" if acc else step_line
+    digest_steps += 1
+    # Stay under Telegram's 4096-char message limit — keep the most recent tail.
+    shown = acc if len(acc) <= 3800 else "…\n" + acc[-3800:]
+    body = f"{label}:\n{shown}"
 
     if digest_msg_id is None:
-        # No active digest — send a new silent message and store its id.
+        # No active digest — send a new silent message and store its id + transcript.
         try:
             new_id = await api.send_message(
-                forum_chat_id,
-                html,
-                message_thread_id=topic_id,
-                parse_mode="HTML",
-                disable_notification=True,
+                forum_chat_id, body, message_thread_id=topic_id, disable_notification=True,
             )
         except Exception:
-            log.debug("new digest HTML send failed, falling back to plain text", exc_info=True)
-            label = settings.TELEGRAM_ASSISTANT_LABEL
-            plain = f"{label}: {parsed['text'][:3900]}"
-            new_id = await api.send_message(
-                forum_chat_id,
-                plain,
-                message_thread_id=topic_id,
-                disable_notification=True,
-            )
-        await _save_digest_state(thread, new_id, 1)
+            log.debug("new digest send failed", exc_info=True)
+            return
+        await _save_digest_state(thread, new_id, digest_steps, acc)
     else:
-        # Active digest — edit the existing message in place (no re-notification).
-        digest_steps += 1
-        excerpt = _truncate_digest(parsed["text"])
-        label = settings.TELEGRAM_ASSISTANT_LABEL
-        suffix = f" (+{digest_steps} steps)" if digest_steps > 1 else ""
-        digest_text = f"{label}: {excerpt}{suffix}"
-
+        # Active digest — edit in place (no re-notification) with the grown transcript.
         edited = await api.edit_message_text(
-            forum_chat_id,
-            digest_msg_id,
-            digest_text,
-            message_thread_id=topic_id,
+            forum_chat_id, digest_msg_id, body, message_thread_id=topic_id,
         )
         if not edited:
             # Edit failed (message too old / deleted) — start a fresh digest.
             try:
                 new_id = await api.send_message(
-                    forum_chat_id,
-                    html,
-                    message_thread_id=topic_id,
-                    parse_mode="HTML",
-                    disable_notification=True,
+                    forum_chat_id, body, message_thread_id=topic_id, disable_notification=True,
                 )
             except Exception:
-                log.debug("fresh digest HTML send failed after stale edit, falling back to plain text", exc_info=True)
-                plain = f"{label}: {parsed['text'][:3900]}"
-                new_id = await api.send_message(
-                    forum_chat_id,
-                    plain,
-                    message_thread_id=topic_id,
-                    disable_notification=True,
-                )
-            await _save_digest_state(thread, new_id, digest_steps)
+                log.debug("fresh digest send failed after stale edit", exc_info=True)
+                return
+            await _save_digest_state(thread, new_id, digest_steps, acc)
         else:
-            await _save_digest_state(thread, digest_msg_id, digest_steps)
+            await _save_digest_state(thread, digest_msg_id, digest_steps, acc)
 
 
 async def deliver_turn_active(thread, parsed, msg, *, api=None) -> None:
