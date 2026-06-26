@@ -106,3 +106,109 @@ def _run_once(claude_bin, prompt, session_args, work_dir, env, timeout) -> dict:
     except Exception as exc:
         log.warning("claude_headless: unexpected error: %s", exc)
         return {"text": f"(headless run failed: {exc})", "is_error": True}
+
+
+def _safe_emit(on_event, text: str) -> None:
+    try:
+        on_event(text)
+    except Exception:
+        log.debug("claude_headless: on_event raised — ignoring", exc_info=True)
+
+
+def run_headless_streaming(
+    prompt: str,
+    claude_session_id: str,
+    cwd: str,
+    started: bool,
+    on_event,
+    timeout: int = 600,
+) -> dict:
+    """Like run_headless, but streams progress: calls ``on_event(text)`` for each
+    assistant text block and tool-use step as Claude works (via
+    ``--output-format stream-json``), then returns the final {'text', 'is_error'}.
+
+    The caller relays each on_event to the chat (coalesced into one edited message
+    by the backend's ``progress`` delivery mode) so the operator sees Claude working
+    live instead of one block at the end. Never raises. Same robust resume-or-create
+    fallback as run_headless.
+    """
+    claude_bin = _resolve_claude_bin() or "claude"
+    env = {**os.environ}
+    work_dir = cwd or os.path.expanduser("~")
+    resume = ["--resume", claude_session_id]
+    create = ["--session-id", claude_session_id]
+    order = [resume, create] if started else [create, resume]
+
+    last = {"text": "(headless run failed: no attempt)", "is_error": True}
+    for session_args in order:
+        last = _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_event)
+        if not last["is_error"]:
+            return last
+    return last
+
+
+def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_event) -> dict:
+    """One ``claude -p --output-format stream-json`` run; emit per-event. Never raises."""
+    import time as _time
+
+    argv = [
+        claude_bin,
+        "-p", prompt,
+        "--output-format", "stream-json",
+        "--verbose",
+        "--permission-mode", "bypassPermissions",
+        *session_args,
+    ]
+    final = {"text": "", "is_error": True}
+    saw_result = False
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=work_dir, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        deadline = _time.monotonic() + timeout
+        for line in proc.stdout:
+            if _time.monotonic() > deadline:
+                proc.kill()
+                return {"text": f"(headless run failed: timeout after {timeout}s)", "is_error": True}
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue  # non-JSON noise line — skip
+            etype = ev.get("type")
+            if etype == "assistant":
+                for block in (ev.get("message", {}).get("content") or []):
+                    bt = block.get("type")
+                    if bt == "text":
+                        txt = (block.get("text") or "").strip()
+                        if txt:
+                            final["text"] = txt
+                            _safe_emit(on_event, txt)
+                    elif bt == "tool_use":
+                        _safe_emit(on_event, f"🔧 {block.get('name', 'tool')}")
+            elif etype == "result":
+                saw_result = True
+                final["is_error"] = bool(ev.get("is_error"))
+                if ev.get("result"):
+                    final["text"] = ev["result"]
+        proc.wait(timeout=10)
+        if not saw_result and not final["text"]:
+            return {"text": "(headless run failed: no result from stream)", "is_error": True}
+        return final
+    except FileNotFoundError:
+        return {
+            "text": "(headless run failed: 'claude' not found on PATH; set ORC_CLAUDE_BIN)",
+            "is_error": True,
+        }
+    except Exception as exc:
+        log.warning("claude_headless: stream error: %s", exc)
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return {"text": f"(headless run failed: {exc})", "is_error": True}

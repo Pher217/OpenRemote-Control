@@ -405,6 +405,14 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         except Thread.DoesNotExist:
             return
 
+        # First step of a streamed turn (reset=True) starts a fresh progress digest,
+        # so each turn is one message that edits in place as the steps stream in
+        # (instead of every turn accreting onto the previous turn's digest).
+        if data.get("reset"):
+            from apps.observe.delivery import _clear_digest_state  # noqa: PLC0415
+
+            await _clear_digest_state(thread)
+
         await record_turn(thread, "assistant", text)
         await self._deliver_to_telegram(
             thread, {"role": "assistant", "text": text, "session_id": str(thread.id)}
