@@ -102,8 +102,10 @@ async def test_creates_one_topic_per_session_and_routes():
     assert topic_a != topic_b
 
     for _chat_id, text, _topic, parse_mode in fake.send_calls:
-        assert parse_mode == "HTML"
-        assert text.startswith("<b>")
+        if parse_mode == "HTML":
+            # session intro / user milestone messages are HTML
+            assert text.startswith("<b>")
+        # else: progress digest sends are plain text (accumulated transcript) — no HTML
 
     a_sends = [c for c in fake.send_calls if c[2] == topic_a]
     b_sends = [c for c in fake.send_calls if c[2] == topic_b]
