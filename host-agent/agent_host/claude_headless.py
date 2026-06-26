@@ -141,15 +141,28 @@ def run_headless_streaming(
 
     last = {"text": "(headless run failed: no attempt)", "is_error": True}
     for session_args in order:
-        last = _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_event)
+        last, emitted = _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_event)
         if not last["is_error"]:
+            return last
+        # Never retry the alternate flag once the attempt has streamed any event:
+        # re-running the same prompt under bypassPermissions would duplicate tool
+        # side effects. Fallback is only for a clean init-time failure (e.g. wrong
+        # --resume/--session-id), which errors before any event is emitted.
+        if emitted:
             return last
     return last
 
 
-def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_event) -> dict:
-    """One ``claude -p --output-format stream-json`` run; emit per-event. Never raises."""
-    import time as _time
+def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_event):
+    """One ``claude -p --output-format stream-json`` run; emit per-event.
+
+    Returns ``(result_dict, emitted_bool)`` where emitted is True if any assistant
+    text / tool step was relayed. Never raises. A watchdog thread enforces *timeout*
+    even when Claude is silent (the stdout iterator otherwise blocks forever and
+    would hold the per-session lock); stderr is discarded so a full stderr pipe
+    can't deadlock the child against the stdout reader.
+    """
+    import threading
 
     argv = [
         claude_bin,
@@ -160,18 +173,43 @@ def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_ev
         *session_args,
     ]
     final = {"text": "", "is_error": True}
+    emitted = [False]
     saw_result = False
     proc = None
+
+    def _emit(t: str) -> None:
+        emitted[0] = True
+        _safe_emit(on_event, t)
+
     try:
         proc = subprocess.Popen(
             argv, cwd=work_dir, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1,
         )
-        deadline = _time.monotonic() + timeout
-        for line in proc.stdout:
-            if _time.monotonic() > deadline:
+    except FileNotFoundError:
+        return ({
+            "text": "(headless run failed: 'claude' not found on PATH; set ORC_CLAUDE_BIN)",
+            "is_error": True,
+        }, False)
+    except Exception as exc:
+        log.warning("claude_headless: stream spawn error: %s", exc)
+        return ({"text": f"(headless run failed: {exc})", "is_error": True}, False)
+
+    done = threading.Event()
+    killed = threading.Event()
+
+    def _watchdog() -> None:
+        if not done.wait(timeout):
+            killed.set()
+            try:
                 proc.kill()
-                return {"text": f"(headless run failed: timeout after {timeout}s)", "is_error": True}
+            except Exception:
+                pass
+
+    watchdog = threading.Thread(target=_watchdog, daemon=True)
+    watchdog.start()
+    try:
+        for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
@@ -187,28 +225,29 @@ def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_ev
                         txt = (block.get("text") or "").strip()
                         if txt:
                             final["text"] = txt
-                            _safe_emit(on_event, txt)
+                            _emit(txt)
                     elif bt == "tool_use":
-                        _safe_emit(on_event, f"🔧 {block.get('name', 'tool')}")
+                        _emit(f"🔧 {block.get('name', 'tool')}")
             elif etype == "result":
                 saw_result = True
                 final["is_error"] = bool(ev.get("is_error"))
                 if ev.get("result"):
                     final["text"] = ev["result"]
-        proc.wait(timeout=10)
-        if not saw_result and not final["text"]:
-            return {"text": "(headless run failed: no result from stream)", "is_error": True}
-        return final
-    except FileNotFoundError:
-        return {
-            "text": "(headless run failed: 'claude' not found on PATH; set ORC_CLAUDE_BIN)",
-            "is_error": True,
-        }
     except Exception as exc:
-        log.warning("claude_headless: stream error: %s", exc)
-        if proc is not None:
+        log.warning("claude_headless: stream read error: %s", exc)
+        final = {"text": f"(headless run failed: {exc})", "is_error": True}
+    finally:
+        done.set()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
             try:
                 proc.kill()
             except Exception:
                 pass
-        return {"text": f"(headless run failed: {exc})", "is_error": True}
+
+    if killed.is_set():
+        return ({"text": f"(headless run failed: timeout after {timeout}s)", "is_error": True}, emitted[0])
+    if not saw_result and not final["text"]:
+        return ({"text": "(headless run failed: no result from stream)", "is_error": True}, emitted[0])
+    return (final, emitted[0])
