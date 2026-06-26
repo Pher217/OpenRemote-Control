@@ -406,8 +406,18 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             return
 
         await record_turn(thread, "assistant", text)
+        # reset=True (first step of a streamed turn) is delivered IN-ORDER through
+        # the delivery queue so a fast next turn can't clear the digest before the
+        # previous turn's still-queued chunks have drained. deliver_turn starts a
+        # fresh progress digest when it sees reset, giving one edited message/turn.
         await self._deliver_to_telegram(
-            thread, {"role": "assistant", "text": text, "session_id": str(thread.id)}
+            thread,
+            {
+                "role": "assistant",
+                "text": text,
+                "session_id": str(thread.id),
+                "reset": bool(data.get("reset")),
+            },
         )
 
         def _mark_started():

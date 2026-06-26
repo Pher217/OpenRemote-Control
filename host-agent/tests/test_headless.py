@@ -274,3 +274,74 @@ def test_missing_binary_returns_clear_error_not_crash(monkeypatch):
 
     assert result["is_error"] is True
     assert "ORC_CLAUDE_BIN" in result["text"]
+
+
+# ---------------------------------------------------------------------------
+# Streaming runner (stream-json → per-event relay)
+# ---------------------------------------------------------------------------
+
+
+def test_run_headless_streaming_emits_events(monkeypatch):
+    """
+    GIVEN claude -p --output-format stream-json emits init, a tool_use, an
+          assistant text block, and a final result
+    WHEN run_headless_streaming is called
+    THEN on_event fires for the tool step ("🔧 Read") and the text, and the
+         returned result carries the final text with is_error=False.
+    """
+    from agent_host import claude_headless
+
+    lines = [
+        '{"type":"system","subtype":"init"}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"Here it is"}]}}',
+        '{"type":"result","subtype":"success","is_error":false,"result":"Here it is"}',
+    ]
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([ln + "\n" for ln in lines])
+            self.stderr = None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(claude_headless, "_resolve_claude_bin", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(claude_headless.subprocess, "Popen", lambda *a, **k: FakeProc())
+
+    events = []
+    res = claude_headless.run_headless_streaming("hi", "sid-1", "/tmp", True, events.append)
+
+    assert res["is_error"] is False
+    assert res["text"] == "Here it is"
+    assert "🔧 Read" in events
+    assert "Here it is" in events
+
+
+def test_run_headless_streaming_no_result_is_error(monkeypatch):
+    """
+    GIVEN the stream ends with no result event (e.g. claude crashed mid-stream)
+    WHEN run_headless_streaming is called for BOTH resume and create attempts
+    THEN it returns is_error=True (so the caller surfaces a failure, not silence).
+    """
+    from agent_host import claude_headless
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter([])  # empty stream
+            self.stderr = None
+
+        def wait(self, timeout=None):
+            return 1
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(claude_headless, "_resolve_claude_bin", lambda: "/usr/bin/claude")
+    monkeypatch.setattr(claude_headless.subprocess, "Popen", lambda *a, **k: FakeProc())
+
+    res = claude_headless.run_headless_streaming("hi", "sid-2", "/tmp", False, lambda t: None)
+    assert res["is_error"] is True

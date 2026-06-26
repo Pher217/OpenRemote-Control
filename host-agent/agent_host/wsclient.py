@@ -285,11 +285,36 @@ def handle_host_command(
             if claude_session_id not in _headless_locks:
                 _headless_locks[claude_session_id] = asyncio.Lock()
             lock = _headless_locks[claude_session_id]
+            loop = asyncio.get_running_loop()
+
+            # First reply of this turn carries reset=True so the backend starts a
+            # fresh progress digest (one edited message per turn).
+            first = [True]
+
+            def _enqueue_reply(reply_text: str, is_err: bool) -> None:
+                if incoming_queue is None:
+                    log.warning("host_command: headless.prompt: no incoming_queue — reply dropped")
+                    return
+                try:
+                    incoming_queue.put_nowait({
+                        "type": "session.headless_reply",
+                        "data": {
+                            "thread_id": thread_id,
+                            "text": reply_text,
+                            "is_error": is_err,
+                            "reset": first[0],
+                        },
+                    })
+                    first[0] = False
+                except Exception:
+                    log.exception(
+                        "host_command: headless.prompt failed to enqueue reply for thread %r",
+                        thread_id,
+                    )
 
             async with lock:
-                # Engine select: ORC_HEADLESS_ENGINE=sdk runs the turn via the
-                # Agent SDK with per-tool chat approval (Allow/Deny buttons in the
-                # session topic). Default stays `claude -p` bypassPermissions.
+                # Engine select: ORC_HEADLESS_ENGINE=sdk runs via the Agent SDK with
+                # per-tool chat approval. Default streams `claude -p` step-by-step.
                 use_sdk = os.environ.get("ORC_HEADLESS_ENGINE", "").lower() == "sdk"
                 cfg = load() if use_sdk else None
                 if use_sdk and cfg is not None and thread_id:
@@ -297,38 +322,24 @@ def handle_host_command(
 
                     approve = make_approve(cfg.backend_url, cfg.token, thread_id)
                     result = await run_turn(
-                        text,
-                        claude_session_id=claude_session_id,
-                        cwd=cwd,
-                        started=started,
-                        approve=approve,
+                        text, claude_session_id=claude_session_id, cwd=cwd,
+                        started=started, approve=approve,
                     )
+                    _enqueue_reply(result["text"], result["is_error"])
                 else:
-                    from agent_host.claude_headless import run_headless  # noqa: PLC0415
+                    from agent_host.claude_headless import run_headless_streaming  # noqa: PLC0415
+
+                    # Relay each assistant text / tool step live; the backend's
+                    # `progress` mode coalesces them into one edited message.
+                    def on_event(step_text: str) -> None:
+                        loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
 
                     result = await asyncio.to_thread(
-                        run_headless, text, claude_session_id, cwd, started
+                        run_headless_streaming, text, claude_session_id, cwd, started, on_event
                     )
-
-            if incoming_queue is not None:
-                try:
-                    incoming_queue.put_nowait({
-                        "type": "session.headless_reply",
-                        "data": {
-                            "thread_id": thread_id,
-                            "text": result["text"],
-                            "is_error": result["is_error"],
-                        },
-                    })
-                except Exception:
-                    log.exception(
-                        "host_command: headless.prompt failed to enqueue reply for thread %r",
-                        thread_id,
-                    )
-            else:
-                log.warning(
-                    "host_command: headless.prompt: no incoming_queue — reply will not be sent"
-                )
+                    # On failure, nothing useful streamed — surface the error.
+                    if result["is_error"]:
+                        _enqueue_reply(result["text"], True)
 
         loop.create_task(_run_headless_prompt())
     else:

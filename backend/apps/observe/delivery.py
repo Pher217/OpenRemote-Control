@@ -225,6 +225,11 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
         return
 
     # mode == "progress": maintain a per-thread digest message edited in place.
+    # A turn's first streamed step carries reset → start a fresh digest so each
+    # turn is one edited message (handled here, in delivery order, so a fast next
+    # turn can't clear the digest before the prior turn's queued chunks drained).
+    if parsed.get("reset"):
+        await _clear_digest_state(thread)
     digest_msg_id = thread.metadata.get("telegram_digest_message_id")
     digest_steps = thread.metadata.get("telegram_digest_steps", 0)
 
