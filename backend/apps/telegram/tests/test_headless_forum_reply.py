@@ -3,7 +3,6 @@
 Covers:
 - Headless thread reply → send_host_command called with headless.prompt and correct fields.
 - No approval Prompt created for headless sessions.
-- Headless threads appear in _list_drivable_topics.
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ from channels.db import database_sync_to_async
 
 from apps.accounts.models import Account
 from apps.hosts.models import Host
-from apps.telegram.service import _list_drivable_topics, handle_forum_reply
+from apps.telegram.service import handle_forum_reply
 from apps.threads.models import Thread
 
 # ---------------------------------------------------------------------------
@@ -175,92 +174,3 @@ async def test_headless_reply_started_flag_reflects_metadata(settings):
 
     assert len(captured) == 1
     assert captured[0]["started"] is True
-
-
-# ---------------------------------------------------------------------------
-# _list_drivable_topics — headless threads appear
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_headless_thread_appears_in_drivable_topics(settings):
-    """
-    GIVEN a headless RUNNING Thread with a telegram_topic_id in the forum
-    WHEN _list_drivable_topics is called
-    THEN that thread appears in the returned list.
-    """
-    account = await database_sync_to_async(_make_account)("hl3")
-    host = await database_sync_to_async(_make_host)("host-hl3")
-    await database_sync_to_async(
-        lambda: Thread.objects.create(
-            name="headless-topic-visible",
-            runtime="pty",
-            runtime_mode=Thread.RuntimeModeChoices.PTY,
-            account=account,
-            host=host,
-            status=Thread.StatusChoices.RUNNING,
-            metadata={
-                "headless": True,
-                "claude_session_id": str(uuid.uuid4()),
-                "tmux_session_name": None,
-                "telegram_topic_id": 300,
-                "telegram_forum_chat_id": -100555,
-            },
-        )
-    )()
-
-    result = await _list_drivable_topics(-100555)
-
-    assert any(tid == 300 for _name, tid in result)
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_pty_and_headless_both_appear_in_drivable_topics():
-    """
-    GIVEN one headless thread and one PTY+tmux thread both running in the same forum
-    WHEN _list_drivable_topics is called
-    THEN both appear in the result.
-    """
-    account = await database_sync_to_async(_make_account)("hl4")
-    host = await database_sync_to_async(_make_host)("host-hl4")
-
-    await database_sync_to_async(
-        lambda: Thread.objects.create(
-            name="headless-both",
-            runtime="pty",
-            runtime_mode=Thread.RuntimeModeChoices.PTY,
-            account=account,
-            host=host,
-            status=Thread.StatusChoices.RUNNING,
-            metadata={
-                "headless": True,
-                "claude_session_id": str(uuid.uuid4()),
-                "tmux_session_name": None,
-                "telegram_topic_id": 401,
-                "telegram_forum_chat_id": -100666,
-            },
-        )
-    )()
-
-    await database_sync_to_async(
-        lambda: Thread.objects.create(
-            name="pty-both",
-            runtime="pty",
-            runtime_mode=Thread.RuntimeModeChoices.PTY,
-            account=account,
-            host=host,
-            status=Thread.StatusChoices.RUNNING,
-            metadata={
-                "tmux_session_name": "orc-xyz",
-                "telegram_topic_id": 402,
-                "telegram_forum_chat_id": -100666,
-            },
-        )
-    )()
-
-    result = await _list_drivable_topics(-100666)
-    topic_ids = [tid for _n, tid in result]
-    assert 401 in topic_ids
-    assert 402 in topic_ids

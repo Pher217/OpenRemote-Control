@@ -2,8 +2,31 @@
 import pytest
 from channels.db import database_sync_to_async
 
+from apps.accounts.models import Account
 from apps.observe.delivery import deliver_turn_active
-from apps.observe.service import get_or_create_observed_thread
+from apps.threads.models import Thread
+
+
+def _make_thread(session_id, jsonl_path="", provider="claude_code", **meta):
+    account, _ = Account.objects.get_or_create(
+        provider=provider,
+        label="test",
+        defaults={"auth_type": "none", "credential_type": "none"},
+    )
+    return Thread.objects.create(
+        external_session_ref=session_id,
+        name=meta.get("title") or f"{provider}:{session_id[:8]}",
+        runtime=provider,
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        observed_jsonl_path=str(jsonl_path),
+        account=account,
+        metadata={
+            "provider": provider,
+            "repo": meta.get("repo", ""),
+            "branch": meta.get("branch", ""),
+            "title": meta.get("title", ""),
+        },
+    )
 
 
 class _FakeTelegramApi:
@@ -43,7 +66,7 @@ async def test_telegram_active_routes_through_telegram_path(settings):
     settings.ORC_PROMPT_CHAT_ID = ""
 
     fake = _FakeTelegramApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Stg00001", "/tmp/tg1.jsonl"
     )
     turn = {"role": "user", "text": "hello telegram", "uuid": "t1", "session_id": "Stg00001"}
@@ -72,7 +95,7 @@ async def test_whatsapp_active_creates_gateway_message(settings):
     settings.TELEGRAM_FORUM_CHAT_ID = ""
     settings.ORC_PROMPT_CHAT_ID = ""
 
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Swa00001", "/tmp/wa1.jsonl"
     )
     turn = {"role": "user", "text": "hello whatsapp", "uuid": "w1", "session_id": "Swa00001"}
@@ -107,7 +130,7 @@ async def test_no_recipient_configured_is_noop(settings):
     settings.TELEGRAM_FORUM_CHAT_ID = ""
     settings.ORC_PROMPT_CHAT_ID = ""
 
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Snoop001", "/tmp/noop1.jsonl"
     )
     turn = {"role": "user", "text": "silent", "uuid": "n1", "session_id": "Snoop001"}

@@ -11,7 +11,7 @@ launchd `KeepAlive` restarts them on crash and `RunAtLoad` starts them at login.
 | `com.openremote.bot` | inbound Telegram bot (single getUpdates consumer) | `run-bot.sh` |
 | `com.openremote.daemon` | host-agent daemon (headless.prompt / pty.inject recv loop) | `run-daemon.sh` |
 
-All config (paths, `ORC_HEADLESS_ENGINE`, `OBSERVE_DELIVERY_MODE`, `OBSERVE_RUNTIMES`)
+All config (paths, `ORC_HEADLESS_ENGINE`, `OBSERVE_DELIVERY_MODE`)
 lives in `orc-stack.env` — the single source of truth.
 
 ## Use

@@ -87,16 +87,6 @@ services:
       valkey:
         condition: service_healthy
 
-  session-observer:
-    <<: *app
-    restart: always
-    command: ["python", "manage.py", "run_session_observer"]
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      valkey:
-        condition: service_healthy
-
   # -- Messaging gateway (WhatsApp / Slack / Discord / Signal / iMessage) ---
   # The gateway polls /api/gateway/outbox and POSTs to /api/gateway/inbound.
   # WhatsApp auth state and Signal data are persisted in the named volume below.

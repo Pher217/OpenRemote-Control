@@ -84,7 +84,8 @@ async def test_reply_in_session_topic_without_pending_ask_bounces_read_only(sett
     """
     GIVEN a connector session topic with NO pending question
     WHEN  the operator replies in that topic
-    THEN  the existing read-only bounce applies (no crash, no resolution).
+    THEN  the non-driveable bounce applies (no crash, no resolution): the thread
+          is API-mode, so it gets the "doesn't accept typed input" message.
     """
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
     settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
@@ -95,4 +96,4 @@ async def test_reply_in_session_topic_without_pending_ask_bounces_read_only(sett
     await handle_forum_reply(-100111, 43, 111, "hello", send=send)
 
     assert len(calls) == 1
-    assert "read-only" in calls[0]["text"].lower()
+    assert "doesn't accept typed input" in calls[0]["text"].lower()

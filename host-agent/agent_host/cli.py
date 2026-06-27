@@ -38,8 +38,7 @@ def _cmd_daemon(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    runtimes = [r.strip() for r in args.runtimes.split(",")] if args.runtimes else None
-    run(cfg, runtimes=runtimes, poll_interval=args.poll_interval)
+    run(cfg)
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
@@ -104,18 +103,7 @@ def main() -> None:
     enroll_p.add_argument("--hostname", default="", help="Override hostname (optional)")
 
     # --- daemon ---
-    daemon_p = sub.add_parser("daemon", help="Start the observation daemon")
-    daemon_p.add_argument(
-        "--runtimes",
-        default="",
-        help="Comma-separated list of runtimes to observe (e.g. claude_code,codex)",
-    )
-    daemon_p.add_argument(
-        "--poll-interval",
-        type=float,
-        default=2.0,
-        help="Seconds between file-discovery polls (default: 2.0)",
-    )
+    sub.add_parser("daemon", help="Start the drive daemon (headless.prompt / pty.inject)")
 
     # --- run ---
     run_p = sub.add_parser("run", help="Launch a command in a PTY session and stream output")

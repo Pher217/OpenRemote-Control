@@ -296,7 +296,10 @@ def test_chat_surface_thread_excluded_from_fleet():
     GIVEN a TelegramChat thread alongside a real coding session
     WHEN render_fleet_with_activity is called WITHOUT a pre-built fleet_state
          (so it calls build_fleet_state internally)
-    THEN the chat surface thread does NOT appear in the output.
+    THEN the chat surface thread does NOT appear in the output, while the real
+         coding session DOES — rendered under its content-safe label
+         ("observed:<id8>"), never its raw thread.name (the digest derives labels
+         via _safe_label and never emits thread.name, per S0.2 hardening).
     """
     from apps.accounts.models import Account
     from apps.telegram.models import TelegramChat
@@ -317,7 +320,7 @@ def test_chat_surface_thread_excluded_from_fleet():
     )
     TelegramChat.objects.create(chat_id=123456, thread=chat_thread)
 
-    Thread.objects.create(
+    coding_thread = Thread.objects.create(
         name="real-coding-session",
         runtime="claude_code",
         runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
@@ -328,5 +331,9 @@ def test_chat_surface_thread_excluded_from_fleet():
     # Call without pre-built fleet so build_fleet_state() runs.
     result = render_fleet_with_activity()
 
+    # Chat surface excluded — neither its raw name nor any content-safe form leaks.
     assert "telegram:123456" not in result
-    assert "real-coding-session" in result
+    assert f"api:{str(chat_thread.id)[:8]}" not in result
+    # Real coding session included, under its content-safe label (never thread.name).
+    assert "real-coding-session" not in result
+    assert f"observed:{str(coding_thread.id)[:8]}" in result

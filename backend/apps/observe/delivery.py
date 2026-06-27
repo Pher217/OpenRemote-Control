@@ -134,13 +134,11 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
     if api is None:
         api = telegram_api
 
-    # Dedup the documented two-path double-delivery (run_session_observer AND the
-    # hostlink daemon both delivering the same session on one host). Key on the
-    # STABLE per-turn uuid: both paths parse the same JSONL so they share it.
-    # record_turn is NOT idempotent (each path creates a distinct Message with a
-    # distinct id/sequence), so msg.id cannot be the cross-path key. When a runtime
-    # provides no uuid (e.g. Codex), skip dedup — matching the observer's own
-    # uuid-only dedup, so distinct turns are never collapsed.
+    # Best-effort dedup against a redelivered turn (e.g. the daemon re-sends a
+    # queued reply after a reconnect). Key on the STABLE per-turn uuid when the
+    # payload carries one; record_turn is NOT idempotent (it creates a distinct
+    # Message each call), so msg.id cannot be the key. Headless drive replies
+    # carry no uuid, so dedup is simply skipped for them.
     turn_uuid = parsed.get("uuid")
     if turn_uuid:
         cache_key = f"observe:deliver:{thread.id}:{turn_uuid}"

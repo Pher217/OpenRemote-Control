@@ -15,19 +15,11 @@ from apps.threads.models import Thread
 def _make_pty_consumer(host):
     c = HostDaemonConsumer()
     c.host = host
-    c._file_sessions = {}
     c._pty_threads = {}
     # Delivery is offloaded to a background drainer (started in connect()); tests
     # set the queue directly and drain it explicitly.
     c._delivery_queue = asyncio.Queue(maxsize=2000)
     return c
-
-
-async def _drain(consumer, forum_chat_id):
-    """Process the background delivery queue synchronously (drainer is off-loop in prod)."""
-    while not consumer._delivery_queue.empty():
-        thread, parsed = consumer._delivery_queue.get_nowait()
-        await consumers.deliver_turn(thread, parsed, None, forum_chat_id=forum_chat_id)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -194,51 +186,6 @@ class TestPtyFrameHandling:
 
         # Telegram delivery NOT called for raw PTY frames
         assert delivery_calls == []
-
-    async def test_jsonl_turn_attaches_to_pty_thread_and_delivers(self, monkeypatch):
-        """
-        GIVEN a driveable PTY thread keyed by a claude session UUID
-        WHEN a clean JSONL turn (session.event) arrives for that same UUID
-        THEN it attaches to the SAME thread (no duplicate) and IS delivered to
-             Telegram — clean output and input share one topic. (drive-unify PR 2)
-        """
-        delivery_calls = []
-
-        async def fake_deliver(thread, parsed, msg, *, forum_chat_id):
-            delivery_calls.append((str(thread.id), parsed["text"]))
-
-        monkeypatch.setattr(consumers, "deliver_turn", fake_deliver)
-
-        host = await sync_to_async(Host.objects.create)(slug="pty-host-uni", os="linux")
-        consumer = _make_pty_consumer(host)
-        sid = "33333333-3333-3333-3333-333333333333"
-
-        await consumer._handle_pty_start({
-            "session_name": "remote-uni",
-            "command": f"claude --session-id {sid}",
-            "cwd": "/tmp",
-            "claude_session_id": sid,
-        })
-        pty_thread_id = consumer._pty_threads["remote-uni"]
-
-        with override_settings(TELEGRAM_FORUM_CHAT_ID="-100999"):
-            await consumer._handle_session_event({
-                "session_id": sid,
-                "jsonl_path": f"/x/{sid}.jsonl",
-                "provider": "claude_code",
-                "role": "assistant",
-                "text": "the real answer",
-            })
-            # Turn is enqueued; the drainer is what calls deliver_turn.
-            await _drain(consumer, -100999)
-
-        # Same thread, no duplicate
-        total = await sync_to_async(
-            lambda: Thread.objects.filter(external_session_ref=sid).count()
-        )()
-        assert total == 1
-        # Clean turn delivered, attributed to the unified PTY thread
-        assert delivery_calls == [(pty_thread_id, "the real answer")]
 
     async def test_pty_end_marks_thread_completed(self):
         """

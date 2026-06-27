@@ -24,7 +24,6 @@ Internet
 │  Django / DRF (Gunicorn + Uvicorn)           │
 │  Celery worker                               │
 │  Telegram bot         (run_telegram_bot)     │
-│  Session observer     (run_session_observer) │
 │  messaging-gateway    (Node.js sidecar)      │
 │    └─ WhatsApp (Baileys, unofficial — QR)    │
 │    └─ Slack    (Socket Mode bot)             │

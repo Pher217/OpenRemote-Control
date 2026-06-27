@@ -13,7 +13,6 @@ from apps.threads.models import Thread
 def _make_consumer(host):
     c = HostDaemonConsumer()
     c.host = host
-    c._file_sessions = {}
     c._pty_threads = {}
     return c
 

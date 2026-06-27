@@ -153,23 +153,12 @@ TELEGRAM_FORUM_CHAT_ID = os.environ.get("TELEGRAM_FORUM_CHAT_ID", "")
 TELEGRAM_USER_LABEL = os.environ.get("TELEGRAM_USER_LABEL", "You")
 TELEGRAM_ASSISTANT_LABEL = os.environ.get("TELEGRAM_ASSISTANT_LABEL", "Claude")
 
-OBSERVE_CLAUDE_PROJECTS_DIR = os.environ.get("OBSERVE_CLAUDE_PROJECTS_DIR", "")
-OBSERVE_PROJECTS = [
-    s for s in os.environ.get("OBSERVE_PROJECTS", "").replace(" ", "").split(",") if s
-]
-OBSERVE_ACTIVE_MINUTES = int(os.environ.get("OBSERVE_ACTIVE_MINUTES", "0") or "0")
-OBSERVER_RUNTIME = os.environ.get("OBSERVER_RUNTIME", "claude_code")
-# Controls how assistant turns are delivered to Telegram.
+# Controls how a driveable session's assistant turns are streamed to Telegram.
 # "progress"       — collapse consecutive assistant turns into one edited message (default).
 # "all"            — post a new silent message per turn (legacy behaviour).
 # "milestones_only"— drop assistant turns entirely; only user turns + session-start notify.
 OBSERVE_DELIVERY_MODE = os.environ.get("OBSERVE_DELIVERY_MODE", "progress")
 validate_observe_delivery_mode(OBSERVE_DELIVERY_MODE)
-# Comma-separated list of runtimes to observe concurrently. Empty => fall back to
-# OBSERVER_RUNTIME (single, legacy). Each runtime resolves its own scan root/glob.
-OBSERVE_RUNTIMES = [
-    s for s in os.environ.get("OBSERVE_RUNTIMES", "").replace(" ", "").split(",") if s
-]
 
 # Universal MCP connector bridge (apps.connectors): shared bearer token a connector
 # must present, and the chat id where connector Prompts (ask/approve) are delivered.
