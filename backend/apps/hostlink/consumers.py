@@ -1,13 +1,12 @@
 """WebSocket consumer for an enrolled host daemon.
 
 Authenticates the daemon via per-host token and HMAC-signed nonce, then relays
-backend commands and PTY streams while ingesting observed session events and
-lines back into the local thread/telegram pipeline.
+backend commands and drives PTY / headless Claude sessions, streaming their
+turns back into the local thread/telegram pipeline.
 """
 import asyncio
 import logging
 import time
-from pathlib import Path
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -19,12 +18,7 @@ from apps.hostlink import security
 from apps.hostlink.models import HostToken
 from apps.hosts.models import Host
 from apps.observe.delivery import deliver_turn
-from apps.observe.runtimes import UnknownRuntimeError, get_runtime_adapter
-from apps.observe.service import (
-    apply_session_meta,
-    get_or_create_observed_thread,
-    record_turn,
-)
+from apps.observe.service import record_turn
 from apps.telegram.telegram_api import redact_token
 from apps.threads.models import Thread
 
@@ -103,9 +97,6 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         self.host = host
         self.group_name = f"host_{host.id}"
-        # Per-file remembered session id, for runtimes whose turn lines carry no
-        # session id of their own (Codex/Gemini) — mirrors the observer's file_state.
-        self._file_sessions: dict[str, str] = {}
         # Per-PTY-session thread id cache: session_name -> str(thread.id)
         self._pty_threads: dict[str, str] = {}
         # Background Telegram delivery queue + drainer (see module note).
@@ -152,11 +143,7 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         if not isinstance(content, dict):
             return
         msg_type = content.get("type")
-        if msg_type == "session.event":
-            await self._handle_session_event(content.get("data", {}))
-        elif msg_type == "session.line":
-            await self._handle_session_line(content.get("data", {}))
-        elif msg_type == "session.pty_start":
+        if msg_type == "session.pty_start":
             await self._handle_pty_start(content.get("data", {}))
         elif msg_type == "session.pty_output":
             await self._handle_pty_output(content.get("data", {}))
@@ -178,78 +165,6 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
                 {"type": "host_command", "command": "ping", "nonce": content.get("nonce", "")},
             )
         # Unknown message types are silently ignored.
-
-    async def _handle_session_event(self, data: dict):
-        session_id = data.get("session_id", "")
-        jsonl_path = data.get("jsonl_path", "")
-        provider = data.get("provider", "")
-        role = data.get("role", "")
-        text = data.get("text", "")
-
-        if not session_id:
-            return
-
-        thread = await database_sync_to_async(get_or_create_observed_thread)(
-            session_id, jsonl_path, provider
-        )
-
-        # Stamp the host server-side — never trust any host_id in the payload.
-        if thread.host_id != self.host.id or not (thread.metadata or {}).get("host_name"):
-            thread.host = self.host
-            thread.metadata = {**(thread.metadata or {}), "host_name": self.host.name}
-            await database_sync_to_async(thread.save)(update_fields=["host", "metadata"])
-
-        if role and text:
-            await record_turn(thread, role, text)
-            await self._deliver_to_telegram(
-                thread, {"role": role, "text": text, "session_id": session_id}
-            )
-
-    async def _handle_session_line(self, data: dict):
-        """Persist a single raw transcript line, parsed server-side.
-
-        The daemon stays dumb and ships {provider, jsonl_path, raw}; the backend's
-        own per-runtime parsers (the single source of truth) turn it into a turn.
-        Session id is taken from the line, else a per-file remembered header id,
-        else the file stem — so Codex/Gemini turns (no per-line id) attach to one
-        thread per file. The host is always stamped server-side.
-        """
-        provider = data.get("provider", "")
-        jsonl_path = data.get("jsonl_path", "")
-        raw = data.get("raw", "")
-        if not provider or not raw:
-            return
-        try:
-            adapter = get_runtime_adapter(provider)
-        except UnknownRuntimeError:
-            return
-
-        meta = adapter.extract_session_meta(raw)
-        meta_session = meta.pop("session_id", None)
-        if meta_session:
-            self._file_sessions[jsonl_path] = meta_session
-
-        parsed = adapter.parse_turn(raw)
-        session_ref = (
-            (parsed.get("session_id") if parsed else None)
-            or self._file_sessions.get(jsonl_path)
-            or (Path(jsonl_path).stem if jsonl_path else None)
-        )
-        if not session_ref:
-            return
-
-        thread = await database_sync_to_async(get_or_create_observed_thread)(
-            session_ref, jsonl_path, provider
-        )
-        if thread.host_id != self.host.id or not (thread.metadata or {}).get("host_name"):
-            thread.host = self.host
-            thread.metadata = {**(thread.metadata or {}), "host_name": self.host.name}
-            await database_sync_to_async(thread.save)(update_fields=["host", "metadata"])
-        if meta:
-            await database_sync_to_async(apply_session_meta)(thread, meta)
-        if parsed:
-            await record_turn(thread, parsed["role"], parsed["text"])
-            await self._deliver_to_telegram(thread, parsed)
 
     # ------------------------------------------------------------------
     # PTY frame handlers
@@ -279,9 +194,10 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         # Raw PTY frames are terminal screen redraws (box-drawing, spinners, status
         # lines) for a TUI app like Claude — NOT clean conversation turns. Record
         # them as debug telemetry only (source="pty_screen") and do NOT deliver to
-        # Telegram. Clean output reaches the topic exclusively via the parsed JSONL
-        # transcript (session.line / session.event), which resolves to this same
-        # thread by external_session_ref. See drive-unify spec PR 2.
+        # Telegram. Clean turns for a driveable session arrive via the headless
+        # reply path (session.headless_reply → _deliver_to_telegram). A raw `orc
+        # run` TUI session has no clean-output stream — drive via /openremote-control
+        # (headless) for write+stream.
         await record_turn(thread, "assistant", text, source="pty_screen")
 
     async def _handle_pty_end(self, data: dict):

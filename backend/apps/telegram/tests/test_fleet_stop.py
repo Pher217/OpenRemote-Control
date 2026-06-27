@@ -285,9 +285,10 @@ async def test_stop_observed_session_read_only_reply(settings):
     """
     GIVEN an allowlisted operator /stop targeting an observed (non-PTY) session
     WHEN handle_update processes the message
-    THEN an explicit "read-only" or "observed" reply is sent — NOT a silent drop
-         and NOT a session.kill frame.
-    Invariant S4: observed sessions are read-only; explicit reply required.
+    THEN the generic "No running PTY session found" reply is sent — NOT a silent
+         drop and NOT a session.kill frame. (The old observed-specific read-only
+         special-case was removed; only running PTY sessions are stoppable.)
+    Invariant S4: non-PTY sessions yield an explicit not-found reply, never a kill.
     """
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {12345}
     settings.CHANNEL_LAYERS = INMEM_CHANNEL_LAYERS
@@ -303,8 +304,8 @@ async def test_stop_observed_session_read_only_reply(settings):
 
     assert len(send.calls) == 1
     reply = send.calls[0]["text"].lower()
-    assert "read-only" in reply or "observed" in reply, (
-        f"Expected read-only/observed reply, got: {send.calls[0]['text']!r}"
+    assert "no running pty session" in reply, (
+        f"Expected generic not-found reply, got: {send.calls[0]['text']!r}"
     )
 
 

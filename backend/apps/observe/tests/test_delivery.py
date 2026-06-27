@@ -6,13 +6,50 @@ from django.core.cache import cache
 from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
+from apps.accounts.models import Account
 from apps.observe.delivery import TELEGRAM_MAX, _topic_name, deliver_turn, pick_color
-from apps.observe.service import apply_session_meta, get_or_create_observed_thread
 from apps.observe.validators import VALID_DELIVERY_MODES, validate_observe_delivery_mode
 from apps.telegram.telegram_api import FORUM_ICON_COLORS
 from apps.threads.models import Thread
 
 _cache_clear = sync_to_async(cache.clear)
+
+
+def _make_thread(session_id, jsonl_path="", provider="claude_code", **meta):
+    account, _ = Account.objects.get_or_create(
+        provider=provider,
+        label="test",
+        defaults={"auth_type": "none", "credential_type": "none"},
+    )
+    return Thread.objects.create(
+        external_session_ref=session_id,
+        name=meta.get("title") or f"{provider}:{session_id[:8]}",
+        runtime=provider,
+        runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
+        observed_jsonl_path=str(jsonl_path),
+        account=account,
+        metadata={
+            "provider": provider,
+            "repo": meta.get("repo", ""),
+            "branch": meta.get("branch", ""),
+            "title": meta.get("title", ""),
+        },
+    )
+
+
+def _apply_meta(thread, meta):
+    changed = False
+    for key in ("repo", "branch", "title"):
+        value = meta.get(key)
+        if value and thread.metadata.get(key) != value:
+            thread.metadata[key] = value
+            changed = True
+    if changed:
+        new_title = meta.get("title")
+        if new_title and thread.name != new_title:
+            thread.name = new_title
+        thread.save(update_fields=["metadata", "name"])
+    return changed
 
 
 class _FakeApi:
@@ -71,10 +108,10 @@ class _FakeApi:
 async def test_creates_one_topic_per_session_and_routes():
     """GIVEN two sessions WHEN turns delivered THEN one topic per session, routed."""
     fake = _FakeApi()
-    thread_a = await database_sync_to_async(get_or_create_observed_thread)(
+    thread_a = await database_sync_to_async(_make_thread)(
         "Saaaaaaa", "/tmp/a.jsonl"
     )
-    thread_b = await database_sync_to_async(get_or_create_observed_thread)(
+    thread_b = await database_sync_to_async(_make_thread)(
         "Sbbbbbbb", "/tmp/b.jsonl"
     )
 
@@ -126,7 +163,7 @@ async def test_creates_one_topic_per_session_and_routes():
 async def test_truncates_long_text():
     """GIVEN text over the limit WHEN delivered THEN it is truncated with an ellipsis."""
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Slooooong", "/tmp/l.jsonl"
     )
     turn = {
@@ -171,7 +208,7 @@ async def test_falls_back_to_plain_text_on_html_send_failure():
             return self._next_msg_id
 
     fake = _FailingHtmlApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sfallbck", "/tmp/f.jsonl"
     )
 
@@ -203,10 +240,10 @@ async def test_topic_name_and_intro_from_meta():
     """GIVEN a thread with meta WHEN a topic is created THEN name is prov·repo·title
     and a single HTML intro precedes the turn; a later turn reuses the topic."""
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Smeta123", "/tmp/m.jsonl"
     )
-    await database_sync_to_async(apply_session_meta)(
+    await database_sync_to_async(_apply_meta)(
         thread,
         {"repo": "agent-command-center", "branch": "claude/x", "title": "My Title"},
     )
@@ -245,7 +282,7 @@ async def test_intro_notifies_user_turn_notifies():
     THEN the topic-intro message notifies and the user turn also notifies.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Ssilent1", "/tmp/silent.jsonl"
     )
     turn = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Ssilent1"}
@@ -276,7 +313,7 @@ async def test_save_topic_id_persists_forum_chat_id():
     THEN  metadata contains telegram_forum_chat_id alongside telegram_topic_id.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sforum01", "/tmp/fc.jsonl"
     )
     turn = {"role": "user", "text": "hi", "uuid": "1", "session_id": "Sforum01"}
@@ -306,7 +343,7 @@ async def test_progress_mode_collapses_assistant_turns_into_digest():
     THEN ONE initial send + TWO edits (not 3 sends); digest message_id stored in metadata.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sprogr01", "/tmp/p1.jsonl"
     )
 
@@ -347,7 +384,7 @@ async def test_progress_mode_user_turn_notifies_and_resets_digest():
     THEN a fresh notifying message is posted and telegram_digest_message_id is cleared.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sprogr02", "/tmp/p2.jsonl"
     )
 
@@ -395,7 +432,7 @@ async def test_progress_mode_next_assistant_after_user_starts_fresh_digest():
     THEN a brand-new send is made (not an edit), and a new digest id is stored.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sprogr03", "/tmp/p3.jsonl"
     )
 
@@ -436,7 +473,7 @@ async def test_milestones_only_drops_assistant_turns():
     THEN assistant turns are dropped (no send beyond intro); user turn posts a fresh message.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Smilest1", "/tmp/ms1.jsonl"
     )
 
@@ -479,7 +516,7 @@ async def test_all_mode_sends_each_assistant_turn_silently():
     THEN each turn posts its own silent message (no edits).
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sallmod1", "/tmp/al1.jsonl"
     )
 
@@ -515,7 +552,7 @@ async def test_send_message_returns_id_and_edit_uses_it():
     THEN edit_message_text is called with the message_id returned by the first send.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sretid01", "/tmp/ri1.jsonl"
     )
 
@@ -560,7 +597,7 @@ async def test_progress_mode_edit_failure_falls_back_to_fresh_send():
     """
     fake = _FakeApi()
     fake._edit_ok = False  # simulate edit failure (message too old / deleted)
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Seditfl1", "/tmp/ef1.jsonl"
     )
 
@@ -636,7 +673,7 @@ async def test_same_turn_delivered_twice_sends_once():
     THEN only one telegram send is made.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sidemp01", "/tmp/id1.jsonl"
     )
 
@@ -672,7 +709,7 @@ async def test_different_turns_delivered_twice_sends_twice():
     THEN two telegram sends are made.
     """
     fake = _FakeApi()
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sidemp02", "/tmp/id2.jsonl"
     )
 
@@ -751,7 +788,7 @@ async def test_stale_topic_is_recreated_and_redelivered():
             )
 
     fake = _StaleTopicApi(stale_topic_id=999)
-    thread = await database_sync_to_async(get_or_create_observed_thread)(
+    thread = await database_sync_to_async(_make_thread)(
         "Sstale01", "/tmp/stale.jsonl"
     )
 

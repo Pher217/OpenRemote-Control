@@ -92,35 +92,6 @@ def _lookup_thread_for_topic(forum_chat_id: int, message_thread_id: int):
     )
 
 
-def _topic_link(forum_chat_id: int, topic_id: int) -> str:
-    """Telegram supergroup topic deep-link. Strip the -100 supergroup prefix."""
-    internal = str(forum_chat_id).removeprefix("-100")
-    return f"https://t.me/c/{internal}/{topic_id}"
-
-
-@database_sync_to_async
-def _list_drivable_topics(forum_chat_id: int) -> list[tuple[str, int]]:
-    """Return (name, topic_id) pairs for live driveable sessions in this forum.
-
-    Driveable = headless Claude thread OR PTY thread with a tmux_session_name.
-    """
-    out = []
-    qs = Thread.objects.filter(
-        runtime_mode=Thread.RuntimeModeChoices.PTY,
-        status=Thread.StatusChoices.RUNNING,
-        host_id__isnull=False,
-        metadata__telegram_forum_chat_id=forum_chat_id,
-    )
-    for t in qs:
-        m = t.metadata or {}
-        tid = m.get("telegram_topic_id")
-        if not tid:
-            continue
-        if m.get("headless") or m.get("tmux_session_name"):
-            out.append((t.name, int(tid)))
-    return out
-
-
 @database_sync_to_async
 def _resolve_host(host_arg: str):
     """Resolve a host by slug or name (case-insensitive). Returns Host or None."""
@@ -249,10 +220,12 @@ async def handle_forum_reply(
 
     Auth: from_user_id must be in TELEGRAM_ALLOWED_CHAT_IDS AND
           forum_chat_id must match TELEGRAM_FORUM_CHAT_ID.
-    Behaviour in Phase 1:
+    Behaviour:
       - Unknown topic → inform user.
-      - Read-only session (not PTY / no host / no tmux_session_name) → inform user.
-      - Driveable PTY session → placeholder reply (injection is Phase 4).
+      - Pending ask_human prompt for this thread → resolve it with the reply.
+      - Non-driveable thread (no host) → "doesn't accept typed input" message.
+      - Headless session → dispatch headless.prompt to the host.
+      - Driveable PTY session → inject keystrokes (auto-approve or approval prompt).
     """
     # --- Auth gate -----------------------------------------------------------
     if from_user_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
@@ -296,29 +269,22 @@ async def handle_forum_reply(
         )
         return
 
-    # --- Read-only guard -----------------------------------------------------
+    # --- Non-driveable guard -------------------------------------------------
+    # Every chat surface is driveable by design — only headless Claude and PTY
+    # sessions land here. A thread with no host (e.g. a connector API session
+    # whose ask was already resolved above) cannot take typed input.
     is_pty = thread.runtime_mode == Thread.RuntimeModeChoices.PTY
     has_host = thread.host_id is not None
     is_headless = bool((thread.metadata or {}).get("headless"))
     has_tmux = bool((thread.metadata or {}).get("tmux_session_name"))
 
     if not (has_host and (is_headless or (is_pty and has_tmux))):
-        drivable = await _list_drivable_topics(configured_forum_id)
-        if drivable:
-            lines = "\n".join(
-                f"• {name}: {_topic_link(configured_forum_id, tid)}"
-                for name, tid in drivable
-            )
-            body = (
-                "This topic mirrors a read-only session, so input can't be sent here.\n\n"
-                "Reply in one of your live sessions instead:\n" + lines
-            )
-        else:
-            body = (
-                "This session is read-only, and there's no live `orc run` session right now. "
-                "Start one with `orc run` to send input."
-            )
-        await send(forum_chat_id, body, message_thread_id=message_thread_id)
+        await send(
+            forum_chat_id,
+            "This session doesn't accept typed input. Start a driveable session "
+            "with `/openremote-control` (or `orc run`) to chat with it.",
+            message_thread_id=message_thread_id,
+        )
         return
 
     # --- Headless Claude session dispatch ------------------------------------
@@ -627,21 +593,7 @@ async def _handle_stop_command(chat_id: int, text: str, *, send) -> None:
     thread, error_msg = await _resolve_pty_thread_for_stop(session_arg)
 
     if thread is None:
-        # Check if there is a non-PTY (observed) thread with this name to give
-        # a helpful "read-only" reply instead of a generic "not found".
-        observed = await database_sync_to_async(
-            lambda: Thread.objects.filter(
-                runtime_mode=Thread.RuntimeModeChoices.OBSERVED,
-                metadata__tmux_session_name=session_arg,
-            ).first()
-        )()
-        if observed is not None:
-            await send(
-                chat_id,
-                f"Session {session_arg!r} is observed (read-only) — nothing to stop.",
-            )
-        else:
-            await send(chat_id, error_msg or f"No running PTY session found for {session_arg!r}.")
+        await send(chat_id, error_msg or f"No running PTY session found for {session_arg!r}.")
         return
 
     # Emit session.kill to the host daemon.

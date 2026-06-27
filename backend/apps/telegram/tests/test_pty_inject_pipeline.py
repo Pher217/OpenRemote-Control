@@ -272,9 +272,10 @@ async def test_allow_injects_exact_stored_text(settings):
 @pytest.mark.asyncio
 async def test_observed_thread_reply_does_not_create_approval_prompt(settings):
     """
-    GIVEN an OBSERVED (read-only) thread
+    GIVEN an OBSERVED (non-driveable) thread
     WHEN  handle_forum_reply is called
-    THEN  no APPROVAL Prompt is created (read-only reply is sent instead).
+    THEN  no APPROVAL Prompt is created (the "doesn't accept typed input" bounce
+          is sent instead).
     Invariant 3: observed sessions never inject.
     """
     settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
@@ -291,9 +292,9 @@ async def test_observed_thread_reply_does_not_create_approval_prompt(settings):
     send, calls = await _make_send()
     await handle_forum_reply(-100111, 103, 111, "some text", send=send)
 
-    # A read-only informational reply is sent, not an approval prompt
+    # A non-driveable informational reply is sent, not an approval prompt
     assert len(calls) == 1
-    assert "read-only" in calls[0]["text"].lower()
+    assert "doesn't accept typed input" in calls[0]["text"].lower()
 
     @database_sync_to_async
     def _count_prompts():
