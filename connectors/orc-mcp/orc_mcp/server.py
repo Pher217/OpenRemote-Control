@@ -20,6 +20,8 @@ import sys
 
 
 def _serve() -> None:
+    import os
+
     from mcp.server.fastmcp import FastMCP
 
     from orc_mcp.client import OrcBackendClient
@@ -32,7 +34,20 @@ def _serve() -> None:
         """Start an OpenRemote-Control session for this coding session and dispatch it to
         the operator's messaging app of choice (Telegram, WhatsApp, Slack, Signal, or
         iMessage), so they can supervise from their phone. Optionally pass a session name."""
-        result = client.start_remote_control(name)
+        # Bind to THIS coding session so a Telegram reply resumes this exact
+        # conversation (write+stream), not a fresh one. Claude Code exposes its
+        # session id as CLAUDE_CODE_SESSION_ID to MCP-server subprocesses; cwd is
+        # the workspace the resumed `claude -p` runs in.
+        claude_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        try:
+            workspace_root = os.getcwd()
+        except OSError:
+            workspace_root = ""
+        result = client.start_remote_control(
+            name,
+            claude_session_id=claude_session_id,
+            workspace_root=workspace_root,
+        )
         if result.startswith("["):
             return result
         return f"Remote-control session dispatched to your chat: {result}"

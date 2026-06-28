@@ -58,6 +58,33 @@ def test_start_remote_control_posts_and_returns_name():
     assert seen["body"]["connector_id"] == "c1"
 
 
+def test_start_remote_control_sends_session_binding():
+    """claude_session_id + workspace_root are forwarded so the chat drives THIS session."""
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"ok": True, "thread_id": "t1", "name": "s"})
+
+    _make(handler).start_remote_control(
+        "s", claude_session_id="sid-123", workspace_root="/tmp/proj"
+    )
+    assert seen["body"]["claude_session_id"] == "sid-123"
+    assert seen["body"]["workspace_root"] == "/tmp/proj"
+
+
+def test_start_remote_control_omits_binding_when_absent():
+    """No session id → no claude_session_id key (standalone session, unchanged)."""
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"ok": True, "thread_id": "t1", "name": "s"})
+
+    _make(handler).start_remote_control("s")
+    assert "claude_session_id" not in seen["body"]
+
+
 def test_start_remote_control_returns_sentinel_on_error():
     def handler(req):
         return httpx.Response(500)
