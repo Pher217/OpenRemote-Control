@@ -102,11 +102,19 @@ class Message(models.Model):
     sequence = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
     metadata = models.JSONField(default=dict, blank=True)
+    source_event_key = models.CharField(max_length=64, null=True, default=None, blank=True)
 
     class Meta:
         ordering = ["sequence"]
         indexes = [
             models.Index(fields=["thread", "sequence"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["thread", "source_event_key"],
+                condition=models.Q(source_event_key__isnull=False),
+                name="unique_thread_source_event_key",
+            ),
         ]
 
     def __str__(self) -> str:

@@ -15,6 +15,9 @@ handle_host_command()
     Default handler for inbound host_command frames from the backend.
     Dispatches on frame["command"]: "ping" is acknowledged, unknown commands
     are logged and ignored.  "pty.inject" is reserved for Phase 4.
+    "tail.start"/"tail.stop" manage a scoped TranscriptTail per claude_session_id
+    (see agent_host.transcript_tail) so editor-typed turns can be mirrored to
+    the chat connector without scanning the whole transcript directory.
 """
 
 from __future__ import annotations
@@ -33,12 +36,18 @@ import websockets
 from agent_host.config import HostConfig, load
 from agent_host.queue import OfflineQueue
 from agent_host.signing import sign
+from agent_host.transcript_tail import TranscriptTail
 
 log = logging.getLogger(__name__)
 
 # Per-claude-session serialization locks for headless.prompt so two prompts to
 # the same session cannot overlap (dict is module-level; lock created on first use).
 _headless_locks: dict[str, asyncio.Lock] = {}
+
+# Active scoped transcript tails, keyed by claude_session_id. Populated by
+# "tail.start" / "tail.stop" host commands; consulted by headless.prompt to
+# suppress the tail during a live-streamed drive (two-writer dedup).
+_transcript_tails: dict[str, TranscriptTail] = {}
 
 # Events whose JSON encoding exceeds this byte threshold are dropped rather than
 # sent — a single oversized frame will cause the server to close the connection
@@ -313,35 +322,126 @@ def handle_host_command(
                     )
 
             async with lock:
-                # Engine select: ORC_HEADLESS_ENGINE=sdk runs via the Agent SDK with
-                # per-tool chat approval. Default streams `claude -p` step-by-step.
-                use_sdk = os.environ.get("ORC_HEADLESS_ENGINE", "").lower() == "sdk"
-                cfg = load() if use_sdk else None
-                if use_sdk and cfg is not None and thread_id:
-                    from agent_host.sdk_session import make_approve, run_turn  # noqa: PLC0415
+                # Suppress the scoped transcript tail (if any) for this session
+                # while we stream this turn live — otherwise the same turn would
+                # be forwarded twice once it also lands in the JSONL transcript.
+                tail = _transcript_tails.get(claude_session_id)
+                if tail is not None:
+                    tail.drive_started()
+                success = False
+                try:
+                    # Engine select: ORC_HEADLESS_ENGINE=sdk runs via the Agent SDK
+                    # with per-tool chat approval. Default streams `claude -p`
+                    # step-by-step.
+                    use_sdk = os.environ.get("ORC_HEADLESS_ENGINE", "").lower() == "sdk"
+                    cfg = load() if use_sdk else None
+                    if use_sdk and cfg is not None and thread_id:
+                        from agent_host.sdk_session import make_approve, run_turn  # noqa: PLC0415
 
-                    approve = make_approve(cfg.backend_url, cfg.token, thread_id)
-                    result = await run_turn(
-                        text, claude_session_id=claude_session_id, cwd=cwd,
-                        started=started, approve=approve,
-                    )
-                    _enqueue_reply(result["text"], result["is_error"])
-                else:
-                    from agent_host.claude_headless import run_headless_streaming  # noqa: PLC0415
+                        approve = make_approve(cfg.backend_url, cfg.token, thread_id)
+                        result = await run_turn(
+                            text, claude_session_id=claude_session_id, cwd=cwd,
+                            started=started, approve=approve,
+                        )
+                        _enqueue_reply(result["text"], result["is_error"])
+                    else:
+                        from agent_host.claude_headless import (
+                            run_headless_streaming,  # noqa: PLC0415
+                        )
 
-                    # Relay each assistant text / tool step live; the backend's
-                    # `progress` mode coalesces them into one edited message.
-                    def on_event(step_text: str) -> None:
-                        loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
+                        # Relay each assistant text / tool step live; the backend's
+                        # `progress` mode coalesces them into one edited message.
+                        def on_event(step_text: str) -> None:
+                            loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
 
-                    result = await asyncio.to_thread(
-                        run_headless_streaming, text, claude_session_id, cwd, started, on_event
-                    )
-                    # On failure, nothing useful streamed — surface the error.
-                    if result["is_error"]:
-                        _enqueue_reply(result["text"], True)
+                        result = await asyncio.to_thread(
+                            run_headless_streaming, text, claude_session_id, cwd, started, on_event
+                        )
+                        # On failure, nothing useful streamed — surface the error.
+                        if result["is_error"]:
+                            _enqueue_reply(result["text"], True)
+                    success = not result["is_error"]
+                finally:
+                    if tail is not None:
+                        tail.drive_finished(success=success)
 
         loop.create_task(_run_headless_prompt())
+    elif command == "tail.start":
+        # Backend requests a scoped tail of exactly one Claude Code transcript
+        # so editor-typed turns are mirrored to the chat connector. Never scans
+        # a directory — see agent_host.transcript_tail for the poll design.
+        thread_id = frame.get("thread_id", "")
+        claude_session_id = frame.get("claude_session_id", "")
+        cwd = frame.get("cwd") or ""
+        provider = frame.get("provider", "")
+
+        if not claude_session_id or not cwd or not thread_id:
+            log.warning(
+                "host_command: tail.start missing claude_session_id, cwd or thread_id — ignoring"
+            )
+            return
+        if provider != "claude":
+            log.warning("host_command: tail.start unsupported provider %r — ignoring", provider)
+            return
+
+        existing = _transcript_tails.get(claude_session_id)
+        if existing is not None and existing.cwd == cwd:
+            return  # Idempotent: already tailing this session at this cwd.
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            log.error(
+                "host_command: tail.start called outside running event loop — ignoring"
+            )
+            return
+
+        if existing is not None:
+            del _transcript_tails[claude_session_id]
+            loop.create_task(existing.stop())
+
+        def _emit(event: dict) -> None:
+            if incoming_queue is None:
+                log.warning("host_command: tail.start: no incoming_queue — event dropped")
+                return
+            try:
+                # data-wrapped like session.headless_reply — the backend
+                # consumer reads the payload from content["data"].
+                incoming_queue.put_nowait({
+                    "type": "session.turn",
+                    "data": {
+                        "thread_id": thread_id,
+                        "claude_session_id": claude_session_id,
+                        "role": event["role"],
+                        "text": event["text"],
+                        "source_event_key": event["source_event_key"],
+                    },
+                })
+            except Exception:
+                log.exception(
+                    "host_command: tail.start failed to enqueue session.turn for thread %r",
+                    thread_id,
+                )
+
+        tail = TranscriptTail(claude_session_id, cwd, emit=_emit, loop=loop)
+        tail.start()
+        _transcript_tails[claude_session_id] = tail
+        log.info("host_command: tail.start started for claude_session_id=%r cwd=%r", claude_session_id, cwd)
+    elif command == "tail.stop":
+        claude_session_id = frame.get("claude_session_id", "")
+        if not claude_session_id:
+            log.warning("host_command: tail.stop missing claude_session_id — ignoring")
+            return
+        tail = _transcript_tails.pop(claude_session_id, None)
+        if tail is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(tail.stop())
+            except RuntimeError:
+                log.error(
+                    "host_command: tail.stop called outside running event loop — tail removed but not cancelled"
+                )
+            log.info("host_command: tail.stop stopped tail for claude_session_id=%r", claude_session_id)
     else:
         log.warning("host_command: unknown command %r — ignoring", command)
 
