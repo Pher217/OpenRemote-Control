@@ -9,8 +9,6 @@ restart or ws reconnect.
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from asgiref.sync import sync_to_async
 
@@ -336,6 +334,56 @@ class TestResyncTailSessions:
             )
 
         await sync_to_async(_make_tmux_thread)()
+        consumer = _make_consumer(host)
+
+        async def fake_send_json(payload):
+            sent.append(payload)
+
+        consumer.send_json = fake_send_json
+
+        await consumer._resync_tail_sessions()
+
+        assert sent == []
+
+    async def test_pending_headless_thread_is_resynced(self):
+        """
+        GIVEN a PENDING headless thread (dispatched but no activity yet — the
+              state every /openremote-control thread sits in at first)
+        WHEN the reconnect resync runs
+        THEN a tail.start frame IS sent for it (a daemon restart must not
+             silently drop the mirror of a freshly-dispatched session).
+        """
+        sent = []
+
+        host = await sync_to_async(_make_host)("resync-host-3")
+        thread = await sync_to_async(_make_headless_thread)(
+            host, claude_session_id="sid-pending", status=Thread.StatusChoices.PENDING
+        )
+        consumer = _make_consumer(host)
+
+        async def fake_send_json(payload):
+            sent.append(payload)
+
+        consumer.send_json = fake_send_json
+
+        await consumer._resync_tail_sessions()
+
+        assert len(sent) == 1
+        assert sent[0]["thread_id"] == str(thread.id)
+        assert sent[0]["command"] == "tail.start"
+
+    async def test_terminal_thread_is_not_resynced(self):
+        """
+        GIVEN a COMPLETED headless thread
+        WHEN the reconnect resync runs
+        THEN no tail.start frame is sent for it.
+        """
+        sent = []
+
+        host = await sync_to_async(_make_host)("resync-host-4")
+        await sync_to_async(_make_headless_thread)(
+            host, claude_session_id="sid-done", status=Thread.StatusChoices.COMPLETED
+        )
         consumer = _make_consumer(host)
 
         async def fake_send_json(payload):

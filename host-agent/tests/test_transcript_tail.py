@@ -325,12 +325,12 @@ async def test_oversized_line_skipped_next_valid_line_emitted(patch_transcript_p
 
 
 @pytest.mark.asyncio
-async def test_drive_finished_success_discards_buffer_and_advances_offset(patch_transcript_path):
+async def test_drive_finished_success_discards_assistant_echoes_and_advances_offset(patch_transcript_path):
     """
-    GIVEN a tail in suppression mode with buffered events
+    GIVEN a tail in suppression mode with buffered assistant events
     WHEN drive_finished(success=True) is called
-    THEN the buffer is discarded and the offset advances to EOF, so content
-         written during suppression is never replayed.
+    THEN the assistant events are discarded (the live stream already delivered
+         them) and the offset advances to EOF, so nothing is replayed.
     """
     transcript_file = patch_transcript_path
 
@@ -355,6 +355,47 @@ async def test_drive_finished_success_discards_buffer_and_advances_offset(patch_
         # Offset now at EOF — polling further ticks should not re-emit anything.
         await asyncio.sleep(0.1)
         assert emitted == []
+    finally:
+        await tail.stop()
+
+
+@pytest.mark.asyncio
+async def test_drive_finished_success_replays_user_events_only(patch_transcript_path):
+    """
+    GIVEN a tail in suppression mode that buffered user AND assistant events
+          (the phone prompt / an editor-typed turn racing the drive, plus the
+          drive's own assistant output)
+    WHEN drive_finished(success=True) is called
+    THEN only the user events are emitted, in order — assistant events are
+         echoes of the live stream and stay discarded.
+    """
+    transcript_file = patch_transcript_path
+
+    emitted: list = []
+    tail = TranscriptTail("sess-1", "/tmp/proj", emit=emitted.append)
+    tail.start()
+    try:
+        await asyncio.sleep(0.05)
+
+        tail.drive_started()
+        with open(transcript_file, "ab") as f:
+            f.write(_line(_user_str_event("phone-1", "phone prompt")))
+            f.write(_line(_assistant_event("echo-1", "streamed answer")))
+            f.write(_line(_user_str_event("editor-1", "editor turn during drive")))
+        await asyncio.sleep(0.1)
+
+        assert emitted == []
+        assert len(tail._buffer) == 3
+
+        tail.drive_finished(success=True)
+
+        assert [e["source_event_key"] for e in emitted] == ["phone-1", "editor-1"]
+        assert all(e["role"] == "user" for e in emitted)
+        assert tail._buffer == []
+
+        # Offset advanced — nothing further replays.
+        await asyncio.sleep(0.1)
+        assert len(emitted) == 2
     finally:
         await tail.stop()
 

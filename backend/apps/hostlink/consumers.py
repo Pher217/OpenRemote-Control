@@ -519,11 +519,20 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         for one host is logged rather than flooding the fresh connection.
         """
         resync_limit = 20
+        # Any non-terminal thread keeps its tail armed — dispatched threads sit
+        # at PENDING until first activity, and filtering on RUNNING alone
+        # silently dropped their mirror after a daemon restart (found live
+        # 2026-07-01, thread 4a6508fb).
         threads = await database_sync_to_async(list)(
-            Thread.objects.filter(
-                host_id=self.host.id,
-                status=Thread.StatusChoices.RUNNING,
-            ).exclude(metadata__claude_session_id="")[:resync_limit + 1]
+            Thread.objects.filter(host_id=self.host.id)
+            .exclude(
+                status__in=[
+                    Thread.StatusChoices.COMPLETED,
+                    Thread.StatusChoices.FAILED,
+                    Thread.StatusChoices.STOPPED,
+                ]
+            )
+            .exclude(metadata__claude_session_id="")[:resync_limit + 1]
         )
         if len(threads) > resync_limit:
             logger.warning(

@@ -127,11 +127,16 @@ class TranscriptTail:
     def drive_finished(self, success: bool) -> None:
         """End suppression for the just-completed headless drive.
 
-        success=True: the live stream already delivered everything correctly.
-        Discard the buffer and fast-forward the tail offset to the file's
-        current size so nothing written during the drive is replayed.
+        success=True: the live stream already delivered the drive's ASSISTANT
+        output, so assistant events from the window are discarded as echoes.
+        USER events are replayed: only assistant turns are duplicated by the
+        stream — user events in the window are the phone prompt itself and any
+        editor-typed turns that raced the drive, and dropping them silently
+        eats parts of the conversation (observed live 2026-07-01: near-
+        continuous drives suppressed most of the editor chat). The offset is
+        fast-forwarded so nothing from the window is re-read.
 
-        success=False: the live stream failed partway; replay the buffered
+        success=False: the live stream failed partway; replay ALL buffered
         events (in order) via emit, then clear the buffer. The offset is left
         alone — normal polling continues from wherever it naturally is.
 
@@ -146,6 +151,9 @@ class TranscriptTail:
             if self._path is not None:
                 with contextlib.suppress(OSError):
                     self._offset = os.stat(self._path).st_size
+            for event in buffered:
+                if event.get("role") == "user":
+                    self._safe_emit(event)
             return
 
         for event in buffered:
