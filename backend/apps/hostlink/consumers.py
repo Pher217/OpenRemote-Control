@@ -7,6 +7,7 @@ turns back into the local thread/telegram pipeline.
 import asyncio
 import logging
 import time
+import uuid
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -105,6 +106,7 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
         self._delivery_task = asyncio.create_task(self._delivery_drainer())
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        await self._resync_tail_sessions()
 
     async def disconnect(self, close_code):
         # Drain pending deliveries before tearing down so already-recorded
@@ -155,6 +157,8 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
             await self._handle_headless_start(content.get("data", {}))
         elif msg_type == "session.headless_reply":
             await self._handle_headless_reply(content.get("data", {}))
+        elif msg_type == "session.turn":
+            await self._handle_session_turn(content.get("data", {}))
         elif msg_type == "host_heartbeat":
             # Echo a ping back THROUGH the group path (group_send → Redis →
             # this consumer's host_command → ws). This exercises the exact
@@ -343,6 +347,57 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
 
         await database_sync_to_async(_mark_started)()
 
+    async def _handle_session_turn(self, data: dict):
+        """Persist + deliver a JSONL-tailed editor turn (session.turn frame).
+
+        Idempotent at the DB layer via record_turn's source_event_key
+        constraint — the daemon may re-send the same transcript event after a
+        restart or ws reconnect, so a duplicate must be dropped, not re-delivered.
+        """
+        thread_id = data.get("thread_id", "")
+        role = data.get("role", "")
+        text = data.get("text", "")
+        source_event_key = data.get("source_event_key", "")
+
+        try:
+            uuid.UUID(str(thread_id))
+        except (ValueError, TypeError):
+            logger.warning("hostlink: session.turn dropped — invalid thread_id")
+            return
+        if role not in {"user", "assistant"}:
+            logger.warning("hostlink: session.turn dropped — invalid role %r", role)
+            return
+        if not text or not source_event_key:
+            logger.warning("hostlink: session.turn dropped — missing text/source_event_key")
+            return
+
+        thread = await database_sync_to_async(
+            Thread.objects.filter(id=thread_id, host_id=self.host.id).first
+        )()
+        if thread is None:
+            logger.warning(
+                "hostlink: session.turn dropped — thread %s not owned by host %s",
+                thread_id, self.host.id,
+            )
+            return
+
+        message = await record_turn(thread, role, text, source_event_key=source_event_key)
+        if message is None:
+            return
+
+        delivered_text = f"🧑 {text}" if role == "user" else text
+        await self._deliver_to_telegram(
+            thread,
+            {
+                "role": role,
+                "text": delivered_text,
+                "session_id": str(thread.id),
+                # Engages the existing TTL delivery-dedup as a throttle; the
+                # DB unique constraint on source_event_key is the correctness layer.
+                "uuid": source_event_key,
+            },
+        )
+
     def _get_or_create_pty_thread(
         self, session_name: str, command: str, cwd: str, claude_session_id: str = ""
     ):
@@ -453,6 +508,44 @@ class HostDaemonConsumer(AsyncJsonWebsocketConsumer):
                 self._delivery_queue.task_done()
             if not getattr(self, "_closing", False):
                 await asyncio.sleep(_DELIVERY_MIN_INTERVAL)
+
+    async def _resync_tail_sessions(self):
+        """On (re)connect, tell the daemon which sessions to tail.
+
+        The daemon may have restarted or reconnected mid-session, losing track
+        of which threads it should be tailing JSONL transcripts for. Sent
+        directly down THIS socket (send_json, not group_send) so it lands only
+        on the daemon that just (re)connected. Capped — a runaway thread count
+        for one host is logged rather than flooding the fresh connection.
+        """
+        resync_limit = 20
+        threads = await database_sync_to_async(list)(
+            Thread.objects.filter(
+                host_id=self.host.id,
+                status=Thread.StatusChoices.RUNNING,
+            ).exclude(metadata__claude_session_id="")[:resync_limit + 1]
+        )
+        if len(threads) > resync_limit:
+            logger.warning(
+                "hostlink: host %s has more than %d running headless threads; "
+                "resync capped", self.host.id, resync_limit,
+            )
+            threads = threads[:resync_limit]
+        for thread in threads:
+            md = thread.metadata or {}
+            claude_session_id = md.get("claude_session_id")
+            if not claude_session_id:
+                continue
+            await self.send_json(
+                {
+                    "type": "host_command",
+                    "command": "tail.start",
+                    "thread_id": str(thread.id),
+                    "claude_session_id": claude_session_id,
+                    "cwd": md.get("cwd", ""),
+                    "provider": "claude",
+                }
+            )
 
     # Group handler for future downstream commands sent via channel_layer.group_send.
     async def host_command(self, event):

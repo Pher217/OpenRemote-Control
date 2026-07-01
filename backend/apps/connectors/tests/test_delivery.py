@@ -10,6 +10,7 @@ non-Telegram platforms.
 import pytest
 
 from apps.connectors import service as connector_service
+from apps.threads.models import Thread
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -24,6 +25,77 @@ def _make_async_spy():
         calls.append((args, kwargs))
 
     return calls, _spy
+
+
+# ---------------------------------------------------------------------------
+# start_session() → tail.start dispatch to the daemon
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestStartSessionTailStartDispatch:
+    def test_sends_tail_start_with_claude_session_id_and_cwd(self, monkeypatch):
+        """
+        GIVEN exactly one enrolled host (unambiguous auto-bind)
+        WHEN start_session runs
+        THEN send_host_command is called once with command="tail.start" and the
+             new thread's claude_session_id + cwd.
+        """
+        from apps.hosts.models import Host
+
+        host = Host.objects.create(slug="ts-host", name="ts-host", os="linux")
+
+        calls = []
+
+        def fake_send_host_command(host_arg, command, **payload):
+            calls.append((host_arg, command, payload))
+
+        monkeypatch.setattr(
+            "apps.hostlink.service.send_host_command", fake_send_host_command
+        )
+
+        result = connector_service.start_session(
+            connector_id="ts-conn-1",
+            tool="claude",
+            workspace_root="/tmp/my-repo",
+            name="Tail dispatch test",
+        )
+
+        thread = Thread.objects.get(id=result["thread_id"])
+        assert len(calls) == 1
+        called_host, command, payload = calls[0]
+        assert called_host.id == host.id
+        assert command == "tail.start"
+        assert payload["thread_id"] == str(thread.id)
+        assert payload["claude_session_id"] == thread.metadata["claude_session_id"]
+        assert payload["cwd"] == "/tmp/my-repo"
+        assert payload["provider"] == "claude"
+
+    def test_no_host_enrolled_skips_dispatch(self, monkeypatch):
+        """
+        GIVEN no enrolled host
+        WHEN start_session runs
+        THEN it falls back to a read-only API thread and no tail.start is sent.
+        """
+        calls = []
+
+        def fake_send_host_command(host_arg, command, **payload):
+            calls.append((host_arg, command, payload))
+
+        monkeypatch.setattr(
+            "apps.hostlink.service.send_host_command", fake_send_host_command
+        )
+
+        result = connector_service.start_session(
+            connector_id="ts-conn-2",
+            tool="claude",
+            workspace_root="/tmp/other-repo",
+            name="No host test",
+        )
+
+        thread = Thread.objects.get(id=result["thread_id"])
+        assert thread.runtime_mode == Thread.RuntimeModeChoices.API
+        assert calls == []
 
 
 # ---------------------------------------------------------------------------

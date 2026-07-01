@@ -297,6 +297,21 @@ def start_session(
                 "host_name": host.name,
             },
         )
+        try:
+            from apps.hostlink.service import (
+                send_host_command,  # noqa: PLC0415 — avoid app-load cycle
+            )
+
+            send_host_command(
+                host,
+                "tail.start",
+                thread_id=str(thread.id),
+                claude_session_id=bound_id,
+                cwd=workspace_root or "",
+                provider="claude",
+            )
+        except Exception:
+            logger.exception("start_session: tail.start dispatch failed; daemon resync covers it")
     else:
         thread = Thread.objects.create(
             name=session_name,
