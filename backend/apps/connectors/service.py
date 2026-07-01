@@ -233,6 +233,7 @@ def start_session(
     tool: str,
     workspace_root: str,
     name: str,
+    claude_session_id: str = "",
 ) -> dict:
     """Start a new remote-control session and dispatch it to the operator's chat.
 
@@ -241,6 +242,12 @@ def start_session(
     orc-mcp bridge. It creates a fresh named thread for this connector, rebinds the
     connector to it (so subsequent notify/ask/approve route to this session), and
     announces it to the operator's messaging app(s) of choice.
+
+    When ``claude_session_id`` is provided (the calling Claude Code session's own
+    id, read from ``CLAUDE_CODE_SESSION_ID``), the driveable thread is bound to
+    THAT existing session — so a Telegram reply runs ``claude -p --resume <id>``
+    and continues *this* conversation rather than spinning up a fresh one. When
+    omitted, a new session id is minted (a standalone driveable session).
     """
     account, _ = Account.objects.get_or_create(
         provider=tool or "connector",
@@ -272,7 +279,10 @@ def start_session(
     hosts = list(Host.objects.all()[:2])
     host = hosts[0] if len(hosts) == 1 else None
     if host is not None:
-        claude_session_id = str(uuid.uuid4())
+        # Bind to the caller's own session when its id is known, so the first
+        # Telegram reply resumes THIS conversation (claude_session_started=True
+        # makes run_headless try --resume first); otherwise mint a fresh session.
+        bound_id = claude_session_id or str(uuid.uuid4())
         thread = Thread.objects.create(
             name=session_name,
             runtime=tool or "claude",
@@ -281,7 +291,8 @@ def start_session(
             host=host,
             metadata={
                 "headless": True,
-                "claude_session_id": claude_session_id,
+                "claude_session_id": bound_id,
+                "claude_session_started": bool(claude_session_id),
                 "cwd": workspace_root or "",
                 "host_name": host.name,
             },
@@ -295,7 +306,7 @@ def start_session(
                 host,
                 "tail.start",
                 thread_id=str(thread.id),
-                claude_session_id=claude_session_id,
+                claude_session_id=bound_id,
                 cwd=workspace_root or "",
                 provider="claude",
             )

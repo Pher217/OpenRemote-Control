@@ -59,6 +59,7 @@ class StartView(ConnectorBaseView):
             tool=d["tool"],
             workspace_root=d.get("workspace_root", ""),
             name=d.get("name", ""),
+            claude_session_id=d.get("claude_session_id", ""),
         )
         return Response({"ok": True, **result}, status=201)
 

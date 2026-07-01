@@ -18,6 +18,11 @@ class StartSerializer(serializers.Serializer):
     tool = serializers.CharField(max_length=64)
     workspace_root = serializers.CharField(max_length=1024, default="", allow_blank=True)
     name = serializers.CharField(max_length=255, default="", allow_blank=True)
+    # The caller's own coding-session id (e.g. CLAUDE_CODE_SESSION_ID). When set,
+    # the driveable thread binds to it so Telegram replies `--resume` THIS session.
+    claude_session_id = serializers.CharField(
+        max_length=255, default="", allow_blank=True
+    )
 
 
 class AskSerializer(serializers.Serializer):

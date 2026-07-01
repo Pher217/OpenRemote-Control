@@ -141,13 +141,23 @@ class OrcBackendClient:
 
     # -- public tools ------------------------------------------------------
 
-    def start_remote_control(self, name: str = "") -> str:
+    def start_remote_control(
+        self, name: str = "", claude_session_id: str = "", workspace_root: str = ""
+    ) -> str:
         """Start a remote-control session and dispatch it to the operator's chat.
 
-        Returns the session name on success, or a '[…]' sentinel on failure.
+        ``claude_session_id`` binds the driveable chat to the caller's own coding
+        session so Telegram replies resume THIS conversation; ``workspace_root`` is
+        the cwd the resumed ``claude -p`` runs in. Returns the session name on
+        success, or a '[…]' sentinel on failure.
         """
         try:
-            r = self._post("/api/connectors/start", {"name": name}, _POST_TIMEOUT)
+            body: dict[str, str] = {"name": name}
+            if claude_session_id:
+                body["claude_session_id"] = claude_session_id
+            if workspace_root:
+                body["workspace_root"] = workspace_root
+            r = self._post("/api/connectors/start", body, _POST_TIMEOUT)
             r.raise_for_status()
             return r.json().get("name") or name or "session"
         except Exception:
