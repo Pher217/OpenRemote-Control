@@ -9,8 +9,6 @@ restart or ws reconnect.
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from asgiref.sync import sync_to_async
 
