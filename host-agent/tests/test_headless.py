@@ -16,10 +16,7 @@ import json
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from agent_host.claude_headless import run_headless
-
 
 # ---------------------------------------------------------------------------
 # Helpers

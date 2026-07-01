@@ -272,6 +272,7 @@ def start_session(
     hosts = list(Host.objects.all()[:2])
     host = hosts[0] if len(hosts) == 1 else None
     if host is not None:
+        claude_session_id = str(uuid.uuid4())
         thread = Thread.objects.create(
             name=session_name,
             runtime=tool or "claude",
@@ -280,11 +281,26 @@ def start_session(
             host=host,
             metadata={
                 "headless": True,
-                "claude_session_id": str(uuid.uuid4()),
+                "claude_session_id": claude_session_id,
                 "cwd": workspace_root or "",
                 "host_name": host.name,
             },
         )
+        try:
+            from apps.hostlink.service import (
+                send_host_command,  # noqa: PLC0415 — avoid app-load cycle
+            )
+
+            send_host_command(
+                host,
+                "tail.start",
+                thread_id=str(thread.id),
+                claude_session_id=claude_session_id,
+                cwd=workspace_root or "",
+                provider="claude",
+            )
+        except Exception:
+            logger.exception("start_session: tail.start dispatch failed; daemon resync covers it")
     else:
         thread = Thread.objects.create(
             name=session_name,
