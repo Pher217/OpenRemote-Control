@@ -25,6 +25,7 @@ class InteractiveEngine:
         cwd: str,
         on_event,
         on_turn_complete,
+        started: bool = False,
     ) -> None:
         self.claude_session_id = claude_session_id
         self.cwd = cwd
@@ -37,7 +38,11 @@ class InteractiveEngine:
         self._lock = threading.Lock()
         self._stopped = False
         self._respawned_this_send = False
-        self._started_once = False
+        # `started` hint: True when this session already exists on disk (e.g.
+        # a fresh engine after a daemon restart). First spawn then uses
+        # --resume — spawning with --session-id for an existing session makes
+        # claude exit with "Session ID already in use" (gotcha #24's pattern).
+        self._started_once = bool(started)
 
     def _resolve_bin(self) -> str:
         return os.environ.get("ORC_CLAUDE_BIN") or "claude"

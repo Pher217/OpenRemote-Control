@@ -55,7 +55,7 @@ _transcript_tails: dict[str, TranscriptTail] = {}
 _engines: dict = {}
 
 
-async def _interactive_turn(claude_session_id, cwd, text, on_event, loop) -> bool:
+async def _interactive_turn(claude_session_id, cwd, text, on_event, loop, started=False) -> bool:
     """Run one turn on the persistent per-session engine; return is_error.
 
     Called under the per-session headless lock, so turns are serialized here
@@ -73,7 +73,9 @@ async def _interactive_turn(claude_session_id, cwd, text, on_event, loop) -> boo
 
     engine = _engines.get(claude_session_id)
     if engine is None:
-        engine = InteractiveEngine(claude_session_id, cwd, on_event, _turn_complete)
+        engine = InteractiveEngine(
+            claude_session_id, cwd, on_event, _turn_complete, started=started,
+        )
         _engines[claude_session_id] = engine
     else:
         engine.on_event = on_event
@@ -388,6 +390,7 @@ def handle_host_command(
 
                         is_err = await _interactive_turn(
                             claude_session_id, cwd, text, on_event, loop,
+                            started=started,
                         )
                         if is_err:
                             _enqueue_reply("(interactive engine: turn failed)", True)
