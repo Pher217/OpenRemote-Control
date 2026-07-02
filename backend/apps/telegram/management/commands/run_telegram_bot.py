@@ -6,6 +6,8 @@ processed update id to avoid replay on restart.
 """
 import asyncio
 import logging
+import os
+import time
 
 from django.conf import settings
 from django.core.cache import cache
@@ -26,12 +28,38 @@ logger = logging.getLogger(__name__)
 # offset so a restart never re-processes updates already handled.
 _LAST_UPDATE_ID_KEY = "telegram:last_update_id"
 
+# Watchdog: if no getUpdates cycle completes for this long, the process exits
+# so the supervisor (launchd KeepAlive) restarts it with fresh connections.
+# The failure this guards against is a silent async stall mid-handling (e.g.
+# a decayed Redis channel-layer await) — the process looks alive, logs
+# nothing, and consumes no more updates (gotcha #26, observed 2026-07-02).
+WATCHDOG_INTERVAL = 60.0
+WATCHDOG_STALL_SECONDS = 300.0
+
+
+def watchdog_is_stalled(last_cycle_monotonic: float, now: float) -> bool:
+    """Pure decision: has the poll loop gone silent past the stall budget?"""
+    return (now - last_cycle_monotonic) > WATCHDOG_STALL_SECONDS
+
 
 class Command(BaseCommand):
     help = "Run the Telegram long-poll bot loop."
 
     def handle(self, *args, **options):
         asyncio.run(self._run())
+
+    async def _watchdog(self, last_cycle: list) -> None:
+        while True:
+            await asyncio.sleep(WATCHDOG_INTERVAL)
+            if watchdog_is_stalled(last_cycle[0], time.monotonic()):
+                logger.error(
+                    "watchdog: no getUpdates cycle completed in %.0fs — "
+                    "exiting so the supervisor restarts the bot",
+                    WATCHDOG_STALL_SECONDS,
+                )
+                # Hard exit: a stalled event loop cannot be trusted to unwind
+                # cleanly, and launchd KeepAlive restarts us within seconds.
+                os._exit(70)
 
     async def _run(self):
         if not settings.TELEGRAM_BOT_TOKEN:
@@ -47,6 +75,9 @@ class Command(BaseCommand):
         last_stored = cache.get(_LAST_UPDATE_ID_KEY)
         offset = (last_stored + 1) if last_stored is not None else 0
 
+        last_cycle = [time.monotonic()]
+        asyncio.create_task(self._watchdog(last_cycle))
+
         while True:
             try:
                 updates = await get_updates(offset)
@@ -54,6 +85,9 @@ class Command(BaseCommand):
                 logger.error("telegram getUpdates failed: %s", redact_token(repr(exc)))
                 await asyncio.sleep(3)
                 continue
+            # A completed poll cycle (even an empty one) proves the loop is
+            # alive; a hang inside update handling below stops this heartbeat.
+            last_cycle[0] = time.monotonic()
 
             for update in updates:
                 update_id = update["update_id"]
