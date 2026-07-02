@@ -49,6 +49,50 @@ _headless_locks: dict[str, asyncio.Lock] = {}
 # suppress the tail during a live-streamed drive (two-writer dedup).
 _transcript_tails: dict[str, TranscriptTail] = {}
 
+# Persistent interactive engines (ORC_HEADLESS_ENGINE=interactive), keyed by
+# claude_session_id. One long-lived `claude -p` stream-json process each —
+# spawned on first prompt, stopped on daemon shutdown or turn timeout.
+_engines: dict = {}
+
+
+async def _interactive_turn(claude_session_id, cwd, text, on_event, loop) -> bool:
+    """Run one turn on the persistent per-session engine; return is_error.
+
+    Called under the per-session headless lock, so turns are serialized here
+    and the engine's internal FIFO is only a safety net. Callbacks are rebound
+    per turn — safe because the lock guarantees one turn at a time.
+    """
+    from agent_host.interactive_engine import InteractiveEngine  # noqa: PLC0415
+
+    done = asyncio.Event()
+    err = [True]
+
+    def _turn_complete(is_err: bool) -> None:
+        err[0] = is_err
+        loop.call_soon_threadsafe(done.set)
+
+    engine = _engines.get(claude_session_id)
+    if engine is None:
+        engine = InteractiveEngine(claude_session_id, cwd, on_event, _turn_complete)
+        _engines[claude_session_id] = engine
+    else:
+        engine.on_event = on_event
+        engine.on_turn_complete = _turn_complete
+    # send() does blocking pipe IO (and possibly a spawn) — keep it off the
+    # event loop so a stalled child can never wedge the daemon's heartbeat.
+    await asyncio.to_thread(engine.send, text)
+    try:
+        await asyncio.wait_for(done.wait(), timeout=600)
+    except TimeoutError:
+        log.warning(
+            "interactive engine: turn timeout — recycling engine for %s",
+            claude_session_id,
+        )
+        _engines.pop(claude_session_id, None)
+        await asyncio.to_thread(engine.stop)
+        return True
+    return err[0]
+
 # Events whose JSON encoding exceeds this byte threshold are dropped rather than
 # sent — a single oversized frame will cause the server to close the connection
 # and would poison the offline queue indefinitely if retried.
@@ -330,12 +374,25 @@ def handle_host_command(
                     tail.drive_started()
                 success = False
                 try:
-                    # Engine select: ORC_HEADLESS_ENGINE=sdk runs via the Agent SDK
-                    # with per-tool chat approval. Default streams `claude -p`
-                    # step-by-step.
-                    use_sdk = os.environ.get("ORC_HEADLESS_ENGINE", "").lower() == "sdk"
+                    # Engine select: ORC_HEADLESS_ENGINE=interactive keeps ONE
+                    # persistent `claude -p` stream-json process per session
+                    # (no per-turn respawn); =sdk runs via the Agent SDK with
+                    # per-tool chat approval. Default streams `claude -p`
+                    # step-by-step, one process per turn.
+                    engine_mode = os.environ.get("ORC_HEADLESS_ENGINE", "").lower()
+                    use_sdk = engine_mode == "sdk"
                     cfg = load() if use_sdk else None
-                    if use_sdk and cfg is not None and thread_id:
+                    if engine_mode == "interactive":
+                        def on_event(step_text: str) -> None:
+                            loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
+
+                        is_err = await _interactive_turn(
+                            claude_session_id, cwd, text, on_event, loop,
+                        )
+                        if is_err:
+                            _enqueue_reply("(interactive engine: turn failed)", True)
+                        result = {"is_error": is_err}
+                    elif use_sdk and cfg is not None and thread_id:
                         from agent_host.sdk_session import make_approve, run_turn  # noqa: PLC0415
 
                         approve = make_approve(cfg.backend_url, cfg.token, thread_id)
