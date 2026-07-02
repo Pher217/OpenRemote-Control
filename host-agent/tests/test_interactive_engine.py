@@ -175,3 +175,29 @@ class TestStopIsIdempotent:
             assert len(col.turns) == 1
         finally:
             engine.stop()
+
+
+def test_started_hint_first_spawn_uses_resume(monkeypatch):
+    """
+    GIVEN an engine constructed with started=True (session already exists on
+          disk — the state after a daemon restart)
+    WHEN the first send spawns the process
+    THEN the spawn uses --resume, not --session-id (which would make claude
+         exit with "Session ID already in use").
+    """
+    from agent_host.interactive_engine import InteractiveEngine
+
+    monkeypatch.setenv("ORC_CLAUDE_BIN", FAKE)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "echo")
+    col = Collector()
+    engine = InteractiveEngine(
+        "sid-restarted", "", col.on_event, col.on_turn_complete, started=True
+    )
+    try:
+        engine.send("hello again")
+        assert col.wait_turn()
+        assert "--resume" in engine._proc.args
+        assert "--session-id" not in engine._proc.args
+        assert col.turns == [False]
+    finally:
+        engine.stop()
