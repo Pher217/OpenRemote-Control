@@ -22,7 +22,7 @@ from pathlib import Path
 
 from agent_host.config import HostConfig
 from agent_host.queue import OfflineQueue
-from agent_host.wsclient import _transcript_tails, run_sender
+from agent_host.wsclient import _engines, _transcript_tails, run_sender
 
 log = logging.getLogger(__name__)
 
@@ -73,5 +73,8 @@ def run(cfg: HostConfig) -> None:
             for tail in list(_transcript_tails.values()):
                 await tail.stop()
             _transcript_tails.clear()
+            for engine in list(_engines.values()):
+                await asyncio.to_thread(engine.stop)
+            _engines.clear()
 
     asyncio.run(_main())
