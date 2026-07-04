@@ -166,8 +166,3 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow, CI, and commit convent
 [Apache-2.0](LICENSE) for code. Documentation in [`docs/`](docs/) is dual-licensed CC-BY-SA 4.0 / Apache-2.0.
 
 OpenRemote Control is an independent, third-party project, not affiliated with Anthropic, OpenAI, Google, or other supported tool vendors. Per Anthropic's Agent SDK guidelines it does not use the "Claude Code" name or visual style; in the UI, Claude runtimes are labeled "Claude Agent (SDK)", "Claude (Remote Control)", "Claude (CLI)", or "Claude (observed)" depending on the adapter.
-
-## Author
-
-Philippe Hermann · [Pher217](https://github.com/Pher217)
-Patrick Hermann· [Patrickh217](https://github.com/Patrickh217)
