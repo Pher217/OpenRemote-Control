@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -201,10 +202,8 @@ def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_ev
     def _watchdog() -> None:
         if not done.wait(timeout):
             killed.set()
-            try:
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
 
     watchdog = threading.Thread(target=_watchdog, daemon=True)
     watchdog.start()
@@ -241,10 +240,8 @@ def _stream_once(claude_bin, prompt, session_args, work_dir, env, timeout, on_ev
         try:
             proc.wait(timeout=10)
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
 
     if killed.is_set():
         return ({"text": f"(headless run failed: timeout after {timeout}s)", "is_error": True}, emitted[0])
