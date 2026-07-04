@@ -1,10 +1,10 @@
 # OpenRemote Control
 
-> A self-hosted control plane for the AI coding agents you already run — Claude Code, Codex, Gemini, and any MCP tool like Cursor or Copilot, across all your machines — routed into one chat inbox (Telegram, or WhatsApp / Slack / Signal) you supervise from your phone.
+> One universal /remote-control for every coding agent you run — Claude Code, Codex, Gemini, Cursor, Copilot, and any MCP tool, across all your machines — centralized into the single chat app you choose (Telegram, WhatsApp, Slack, Signal, Discord…). Start, watch, and drive any session from your phone.
 
-AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard.
+AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard. The deeper problem is that these agents are scattered across machines, terminals, editors and tools with no single place to see or answer them. OpenRemote Control is that single place.
 
-OpenRemote Control turns every agent session into a chat in the app you already use. Agents **notify** you, **ask** you questions, and **request approval** — and you answer once, from your chat app of your choice : Telegram, Whatsapp, Signal, Slack and other. without hunting down the right machine, terminal, or editor.
+Think of the /remote-control built into some coding tools — then make it universal. OpenRemote Control is that, but for every coding agent, not just one: any tool, any machine, funnelled into one chat you already use. Agents **notify** you, **ask** you questions, and **request approval** — so you **start**, **stream**, **drive**, get notified, answer questions and approve actions for all of them in one place, without hunting down the right machine, terminal, or editor.
 
 It's sovereign by design: you host it, your sessions and credentials never leave your infrastructure, and it reaches your tools through official SDKs and the open Model Context Protocol — never browser scraping or vendor hacks.
 
@@ -83,6 +83,7 @@ The backend and host-agent daemon are implemented and tested: **~800 tests passi
 
 ## Why it's different
 
+- **One place for everything** — every agent, every machine, every tool, funnelled into a single chat inbox you already live in. No new app, no per-tool dashboards, no context-switching.
 - **Sovereign / self-hosted** — no SaaS, no hosted middleman. Sessions, prompts, approvals, and credentials stay on hardware you own. The whole stack is OSS and self-hostable.
 - **Multi-host** — your MacBook, Windows workstation, and Linux VPS become one fleet, one inbox. A host daemon enrolls each machine over your private network.
 - **Multi-runtime** — Claude Code today (dispatch, mirror, drive); other MCP-capable tools connect via the `orc-mcp` bridge; per-provider drive engines are on the roadmap.
