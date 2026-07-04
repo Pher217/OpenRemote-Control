@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest in this project. **The backend foundation is implemented and tested** (multi-runtime observe, the universal MCP bridge, the Telegram surface and messaging-gateway connector, a multi-host backend, and a host daemon — see the [README](README.md) for the full shipped/in-progress breakdown). The most useful contributions right now are about **reaching more tools and standing it up live**:
+Thank you for your interest in this project. **The backend foundation is implemented and tested** (chat topics are write plus stream — mirror and drive; the read-only mode was removed; the universal MCP bridge, the Telegram surface and messaging-gateway connector, a multi-host backend, and a host daemon — see the [README](README.md) for the full shipped/in-progress breakdown). The most useful contributions right now are about **reaching more tools and standing it up live**:
 
 1. **Add a runtime adapter.** If you maintain or use an agent CLI we don't observe yet, open a discussion describing its session lifecycle, the auth modes it supports, and the events/hooks it exposes.
 2. **Test the deploy path** on your own self-hosted infrastructure and report where the docs fall short — the deploy runbook is being written now, and real-world friction is invaluable.

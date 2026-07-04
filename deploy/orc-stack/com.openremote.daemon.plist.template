@@ -5,12 +5,12 @@
   <key>Label</key><string>com.openremote.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/philippehermann/dev/OpenRemote-Control/deploy/orc-stack/run-daemon.sh</string>
+    <string>@ORC_REPO@/deploy/orc-stack/run-daemon.sh</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/Users/philippehermann/Library/Logs/orc-stack/daemon.log</string>
-  <key>StandardErrorPath</key><string>/Users/philippehermann/Library/Logs/orc-stack/daemon.log</string>
+  <key>StandardOutPath</key><string>@ORC_LOGS@/daemon.log</string>
+  <key>StandardErrorPath</key><string>@ORC_LOGS@/daemon.log</string>
 </dict>
 </plist>

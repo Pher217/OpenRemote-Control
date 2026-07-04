@@ -5,12 +5,12 @@
   <key>Label</key><string>com.openremote.daphne</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/philippehermann/dev/OpenRemote-Control/deploy/orc-stack/run-daphne.sh</string>
+    <string>@ORC_REPO@/deploy/orc-stack/run-daphne.sh</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/Users/philippehermann/Library/Logs/orc-stack/daphne.log</string>
-  <key>StandardErrorPath</key><string>/Users/philippehermann/Library/Logs/orc-stack/daphne.log</string>
+  <key>StandardOutPath</key><string>@ORC_LOGS@/daphne.log</string>
+  <key>StandardErrorPath</key><string>@ORC_LOGS@/daphne.log</string>
 </dict>
 </plist>

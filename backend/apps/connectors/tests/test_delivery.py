@@ -142,6 +142,10 @@ class TestStartSessionDelivery:
         """
         settings.ORC_MESSAGING_PLATFORM = "telegram"
         settings.ORC_PROMPT_CHAT_ID = ""
+        # routing.py falls back to TELEGRAM_FORUM_CHAT_ID when the prompt chat
+        # id is empty — clear it too so this test is isolated from any real
+        # forum id set in the environment's .env.
+        settings.TELEGRAM_FORUM_CHAT_ID = ""
 
         tg_calls, tg_spy = _make_async_spy()
         import apps.telegram.telegram_api as tg_api
@@ -320,6 +324,10 @@ class TestUnconfiguredRecipient:
         """
         settings.ORC_MESSAGING_PLATFORM = "telegram"
         settings.ORC_PROMPT_CHAT_ID = ""
+        # routing.py falls back to TELEGRAM_FORUM_CHAT_ID when the prompt chat
+        # id is empty — clear it too so this test is isolated from any real
+        # forum id set in the environment's .env.
+        settings.TELEGRAM_FORUM_CHAT_ID = ""
 
         tg_calls, tg_spy = _make_async_spy()
         import apps.telegram.telegram_api as tg_api

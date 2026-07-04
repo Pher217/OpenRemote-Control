@@ -5,12 +5,12 @@
   <key>Label</key><string>com.openremote.bot</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/philippehermann/dev/OpenRemote-Control/deploy/orc-stack/run-bot.sh</string>
+    <string>@ORC_REPO@/deploy/orc-stack/run-bot.sh</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/Users/philippehermann/Library/Logs/orc-stack/bot.log</string>
-  <key>StandardErrorPath</key><string>/Users/philippehermann/Library/Logs/orc-stack/bot.log</string>
+  <key>StandardOutPath</key><string>@ORC_LOGS@/bot.log</string>
+  <key>StandardErrorPath</key><string>@ORC_LOGS@/bot.log</string>
 </dict>
 </plist>
