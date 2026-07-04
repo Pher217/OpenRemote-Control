@@ -4,6 +4,7 @@ Provides helpers to send/edit/pin messages, manage forum topics, answer
 callback queries, poll updates, and redact the bot token from logs.
 """
 import asyncio
+import contextlib
 
 import httpx
 from django.conf import settings
@@ -88,10 +89,8 @@ async def send_message(
             # starves the host heartbeat.
             if resp.status_code == 429 and attempt == 0:
                 retry_after = 1.0
-                try:
+                with contextlib.suppress(Exception):
                     retry_after = float(resp.json()["parameters"]["retry_after"])
-                except Exception:
-                    pass
                 await asyncio.sleep(min(retry_after, _MAX_RETRY_AFTER))
                 continue
             resp.raise_for_status()
