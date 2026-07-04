@@ -1,8 +1,18 @@
 # OpenRemote Control
 
+[![CI](https://github.com/Pher217/OpenRemote-Control/actions/workflows/ci.yml/badge.svg)](https://github.com/Pher217/OpenRemote-Control/actions/workflows/ci.yml) [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE) [![Self-hosted](https://img.shields.io/badge/self--hosted-sovereign-6f42c1)](#why-its-different) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md) [![GitHub stars](https://img.shields.io/github/stars/Pher217/OpenRemote-Control?style=social)](https://github.com/Pher217/OpenRemote-Control/stargazers)
+
 > One universal /remote-control for every coding agent you run — Claude Code, Codex, Gemini, Cursor, Copilot, and any MCP tool, across all your machines — centralized into the single chat app you choose (Telegram, WhatsApp, Slack, Signal, Discord…). Start, watch, and drive any session from your phone.
 
 AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, MCP tools. The hard part isn't starting them — it's noticing when one needs you. An agent can sit paused on a yes/no in a tmux pane you closed hours ago, while you're nowhere near that keyboard. The deeper problem is that these agents are scattered across machines, terminals, editors and tools with no single place to see or answer them. OpenRemote Control is that single place.
+
+## Demo
+
+<!-- Record a 20-40s screen capture: type in Claude Code -> it appears in your Telegram group -> reply from your phone -> it drives the session. Save it as docs/demo.gif, then delete the placeholder line below and uncomment the image line below. -->
+
+> 🎥 **Demo coming soon** — a ~20-second clip: start a Claude Code session, then drive it from your phone.
+
+<!-- ![Drive a Claude Code session from your phone](docs/demo.gif) -->
 
 Think of the /remote-control built into some coding tools — then make it universal. OpenRemote Control is that, but for every coding agent, not just one: any tool, any machine, funnelled into one chat you already use. Agents **notify** you, **ask** you questions, and **request approval** — so you **start**, **stream**, **drive**, get notified, answer questions and approve actions for all of them in one place, without hunting down the right machine, terminal, or editor.
 
