@@ -67,13 +67,13 @@ The backend and host-agent daemon are implemented and tested: **~800 tests passi
 
 - Session dispatch to a **Telegram forum topic** via the universal **`/openremote-control`** command (the `openremote_control` orc-mcp tool + a shipped Claude Code command)
 - **Bind-to-calling-session** — driving *this* Claude Code session from chat via `CLAUDE_CODE_SESSION_ID` ([PR #91](https://github.com/Pher217/OpenRemote-Control/pull/91))
-- A **scoped editor-turn mirror** with drive suppression, so typed-in-editor turns and chat-driven turns never double-post ([PR #93](https://github.com/Pher217/OpenRemote-Control/pull/93), [PR #94](https://github.com/Pher217/OpenRemote-Control/pull/94))
-- A **persistent interactive engine** (`ORC_HEADLESS_ENGINE=interactive`) — one long-lived `claude -p` stream-json process per session, warm multi-turn replies, and restart survival ([PR #95](https://github.com/Pher217/OpenRemote-Control/pull/95), [PR #96](https://github.com/Pher217/OpenRemote-Control/pull/96))
-- A **bot liveness watchdog** so a stuck Telegram `getUpdates` consumer is caught and restarted ([PR #97](https://github.com/Pher217/OpenRemote-Control/pull/97))
-- The **universal MCP bridge** — `apps.connectors` backend + the installable [`orc-mcp`](connectors/orc-mcp/README.md) client
+- **A scoped editor-turn mirror** with drive suppression, so typed-in-editor turns and chat-driven turns never double-post ([PR #93](https://github.com/Pher217/OpenRemote-Control/pull/93), [PR #94](https://github.com/Pher217/OpenRemote-Control/pull/94))
+- **A persistent interactive engine** (`ORC_HEADLESS_ENGINE=interactive`) — one long-lived `claude -p` stream-json process per session, warm multi-turn replies, and restart survival ([PR #95](https://github.com/Pher217/OpenRemote-Control/pull/95), [PR #96](https://github.com/Pher217/OpenRemote-Control/pull/96))
+- **A bot liveness watchdog** so a stuck Telegram `getUpdates` consumer is caught and restarted ([PR #97](https://github.com/Pher217/OpenRemote-Control/pull/97))
+- **The universal MCP bridge** — `apps.connectors` backend + the installable [`orc-mcp`](connectors/orc-mcp/README.md) client
 - **Telegram** surface + the **messaging-gateway** connector (→ WhatsApp / Slack / Discord / Signal / iMessage)
 - **Multi-host** backend (`apps.hostlink`) + a **host daemon client** (`host-agent`: `orc-host enroll | daemon`)
-- A **PTY input-safety core** that the next milestone builds on
+- **A PTY input-safety core** that the next milestone builds on
 
 **In progress / next:**
 
@@ -121,6 +121,16 @@ command = "orc-mcp"
 ```
 
 Set `ORC_BACKEND_URL` and `ORC_CONNECTOR_TOKEN`, and the agent can reach your chat. Full env reference and the other tools are in the [`orc-mcp` README](connectors/orc-mcp/README.md).
+
+## Quick start (Docker)
+
+The fastest way to a working setup — one command brings up the whole stack (backend, Postgres, Valkey, Telegram bot) and enrolls this machine's host daemon:
+
+```bash
+./quickstart.sh
+```
+
+You'll need three things it can't do for you: Docker installed, a Telegram bot token from [@BotFather](https://t.me/BotFather), and a Telegram group with Topics enabled (add your bot as admin). The script generates all secrets, validates your token, auto-discovers your chat, starts everything, and enrolls the daemon — then you run `/openremote-control` in Claude Code. See [deploy/README.md](deploy/README.md) for the manual/production path.
 
 ## Run the backend (dev)
 
