@@ -53,7 +53,13 @@ async def test_watchdog_exits_process_on_stall(monkeypatch):
     monkeypatch.setattr(bot_mod.os, "_exit", fake_exit)
     monkeypatch.setattr(bot_mod, "WATCHDOG_INTERVAL", 0.01)
 
-    stale = [0.0]  # monotonic() is far beyond 0 + stall budget
+    # Anchor relative to the current clock, not 0.0: monotonic() is time since
+    # boot, and a freshly-booted CI runner (< STALL_SECONDS uptime) would make
+    # (now - 0.0) fall UNDER the stall budget, so the watchdog would never fire
+    # and wait_for would time out. Subtracting the budget guarantees "stalled"
+    # regardless of absolute clock value.
+    import time as _time
+    stale = [_time.monotonic() - bot_mod.WATCHDOG_STALL_SECONDS - 10]
     with pytest.raises(SystemExit):
         await asyncio.wait_for(Command()._watchdog(stale), timeout=5)
     assert exited == [70]
