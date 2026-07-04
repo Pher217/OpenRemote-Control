@@ -95,6 +95,48 @@ async def _interactive_turn(claude_session_id, cwd, text, on_event, loop, starte
         return True
     return err[0]
 
+
+# Per-session Codex drive engines (provider="codex"), keyed by thread_id.
+# Codex hides its session id from the MCP subprocess, so the engine spawns a
+# fresh `codex exec` session on the first turn and captures its thread_id to
+# resume subsequent turns. Keyed by thread_id (stable across the session).
+_codex_engines: dict = {}
+
+
+async def _codex_turn(thread_id, cwd, text, on_event, loop) -> bool:
+    """Run one turn on the per-session Codex engine; return is_error.
+
+    Called under the per-session headless lock (turns serialized). The engine
+    itself is per-turn `codex exec [resume]`, so this only holds one Codex
+    session's continuity via the captured thread_id.
+    """
+    from agent_host.codex_engine import CodexEngine  # noqa: PLC0415
+
+    done = asyncio.Event()
+    err = [True]
+
+    def _turn_complete(is_err: bool) -> None:
+        err[0] = is_err
+        loop.call_soon_threadsafe(done.set)
+
+    engine = _codex_engines.get(thread_id)
+    if engine is None:
+        engine = CodexEngine(cwd, on_event, _turn_complete)
+        _codex_engines[thread_id] = engine
+    else:
+        engine.on_event = on_event
+        engine.on_turn_complete = _turn_complete
+    # send() spawns a subprocess (blocking) — keep it off the event loop.
+    await asyncio.to_thread(engine.send, text)
+    try:
+        await asyncio.wait_for(done.wait(), timeout=600)
+    except TimeoutError:
+        log.warning("codex engine: turn timeout — recycling engine for thread %s", thread_id)
+        _codex_engines.pop(thread_id, None)
+        await asyncio.to_thread(engine.stop)
+        return True
+    return err[0]
+
 # Events whose JSON encoding exceeds this byte threshold are dropped rather than
 # sent — a single oversized frame will cause the server to close the connection
 # and would poison the offline queue indefinitely if retried.
@@ -320,11 +362,17 @@ def handle_host_command(
         cwd = frame.get("cwd") or ""
         started = bool(frame.get("started", False))
         thread_id = frame.get("thread_id", "")
+        provider = (frame.get("provider") or "claude").lower()
 
-        if not claude_session_id or not text:
+        # Codex has no session id at dispatch (Codex hides it from the MCP
+        # subprocess) — it is driven by thread_id + cwd. Claude requires its id.
+        if not text or (provider != "codex" and not claude_session_id):
             log.warning(
-                "host_command: headless.prompt missing claude_session_id or text — ignoring"
+                "host_command: headless.prompt missing text or claude_session_id — ignoring"
             )
+            return
+        if provider == "codex" and not thread_id:
+            log.warning("host_command: headless.prompt codex missing thread_id — ignoring")
             return
 
         try:
@@ -384,7 +432,15 @@ def handle_host_command(
                     engine_mode = os.environ.get("ORC_HEADLESS_ENGINE", "").lower()
                     use_sdk = engine_mode == "sdk"
                     cfg = load() if use_sdk else None
-                    if engine_mode == "interactive":
+                    if provider == "codex":
+                        def on_event(step_text: str) -> None:
+                            loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
+
+                        is_err = await _codex_turn(thread_id, cwd, text, on_event, loop)
+                        if is_err:
+                            _enqueue_reply("(codex engine: turn failed)", True)
+                        result = {"is_error": is_err}
+                    elif engine_mode == "interactive":
                         def on_event(step_text: str) -> None:
                             loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
 

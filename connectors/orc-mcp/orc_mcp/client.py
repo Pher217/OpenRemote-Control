@@ -142,7 +142,8 @@ class OrcBackendClient:
     # -- public tools ------------------------------------------------------
 
     def start_remote_control(
-        self, name: str = "", claude_session_id: str = "", workspace_root: str = ""
+        self, name: str = "", claude_session_id: str = "", workspace_root: str = "",
+        provider: str = "claude",
     ) -> str:
         """Start a remote-control session and dispatch it to the operator's chat.
 
@@ -152,7 +153,7 @@ class OrcBackendClient:
         success, or a '[…]' sentinel on failure.
         """
         try:
-            body: dict[str, str] = {"name": name}
+            body: dict[str, str] = {"name": name, "provider": provider}
             if claude_session_id:
                 body["claude_session_id"] = claude_session_id
             if workspace_root:

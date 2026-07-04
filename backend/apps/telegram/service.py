@@ -221,11 +221,11 @@ async def handle_forum_reply(
     Auth: from_user_id must be in TELEGRAM_ALLOWED_CHAT_IDS AND
           forum_chat_id must match TELEGRAM_FORUM_CHAT_ID.
     Behaviour:
-      - Unknown topic → inform user.
-      - Pending ask_human prompt for this thread → resolve it with the reply.
-      - Non-driveable thread (no host) → "doesn't accept typed input" message.
-      - Headless session → dispatch headless.prompt to the host.
-      - Driveable PTY session → inject keystrokes (auto-approve or approval prompt).
+      - Unknown topic -> inform user.
+      - Pending ask_human prompt for this thread -> resolve it with the reply.
+      - Non-driveable thread (no host) -> "doesn't accept typed input" message.
+      - Headless session -> dispatch headless.prompt to the host.
+      - Driveable PTY session -> inject keystrokes (auto-approve or approval prompt).
     """
     # --- Auth gate -----------------------------------------------------------
     if from_user_id not in settings.TELEGRAM_ALLOWED_CHAT_IDS:
@@ -306,6 +306,7 @@ async def handle_forum_reply(
             text=text,
             thread_id=str(thread.id),
             started=bool(md.get("claude_session_started")),
+            provider=md.get("provider", "claude"),
         )
         return
 
@@ -582,7 +583,7 @@ async def _handle_stop_command(chat_id: int, text: str, *, send) -> None:
     """Handle /stop <session> — identity-gated, no approval (kill-switch).
 
     Resolves to a running PTY Thread by tmux_session_name or thread UUID prefix.
-    Observed / non-PTY sessions → explicit "read-only" reply (never silent drop).
+    Observed / non-PTY sessions -> explicit "read-only" reply (never silent drop).
     """
     parts = text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
@@ -629,7 +630,7 @@ async def _handle_run_command(chat_id: int, text: str, *, send) -> None:
 
     Creates an APPROVAL Prompt binding {host_id, command, cwd} (no re-read of
     the raw Telegram message after this point).  On Allow in handle_callback_query
-    → session.start is dispatched to the host daemon.
+    -> session.start is dispatched to the host daemon.
     """
     parts = text.split(maxsplit=2)
     if len(parts) < 3 or not parts[1].strip() or not parts[2].strip():

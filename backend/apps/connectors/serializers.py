@@ -23,6 +23,7 @@ class StartSerializer(serializers.Serializer):
     claude_session_id = serializers.CharField(
         max_length=255, default="", allow_blank=True
     )
+    provider = serializers.CharField(max_length=32, default='claude', allow_blank=True)
 
 
 class AskSerializer(serializers.Serializer):
