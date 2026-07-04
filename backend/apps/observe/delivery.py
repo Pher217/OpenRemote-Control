@@ -65,10 +65,7 @@ def _topic_name(thread) -> str:
     prefix = f"[{host_name}] " if host_name else ""
 
     # Mode marker: driveable (PTY/headless) vs read-only (observed JSONL).
-    if getattr(thread, "runtime_mode", None) == "observed":
-        marker = "👁 "
-    else:
-        marker = "✏️ "
+    marker = "👁 " if getattr(thread, "runtime_mode", None) == "observed" else "✏️ "
 
     return f"{prefix}{marker}{prov} · {repo} · {title}"[:128]
 
