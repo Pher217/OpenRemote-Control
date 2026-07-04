@@ -33,11 +33,14 @@ def _resolve_codex_bin() -> str:
 
 
 class CodexEngine:
-    def __init__(self, cwd: str, on_event, on_turn_complete) -> None:
+    def __init__(self, cwd: str, on_event, on_turn_complete, session_id: str | None = None) -> None:
         self.cwd = cwd
         self.on_event = on_event
         self.on_turn_complete = on_turn_complete
-        self._session_id: str | None = None
+        # When set (bind), the FIRST turn does `codex exec resume <id>` to
+        # continue the operator's discovered session (a forked snapshot);
+        # otherwise the first turn starts a fresh session.
+        self._session_id: str | None = session_id
         self._turn_in_flight = False
         self._pending: deque[str] = deque()
         self._lock = threading.Lock()

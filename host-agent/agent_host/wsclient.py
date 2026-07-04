@@ -103,12 +103,14 @@ async def _interactive_turn(claude_session_id, cwd, text, on_event, loop, starte
 _codex_engines: dict = {}
 
 
-async def _codex_turn(thread_id, cwd, text, on_event, loop) -> bool:
+async def _codex_turn(thread_id, cwd, text, on_event, loop, initial_session_id="") -> bool:
     """Run one turn on the per-session Codex engine; return is_error.
 
     Called under the per-session headless lock (turns serialized). The engine
     itself is per-turn `codex exec [resume]`, so this only holds one Codex
-    session's continuity via the captured thread_id.
+    session's continuity via the captured thread_id. ``initial_session_id`` (the
+    bind) is applied ONLY when the engine is first created — the operator's
+    discovered session, resumed on turn 1; later turns follow the fork chain.
     """
     from agent_host.codex_engine import CodexEngine  # noqa: PLC0415
 
@@ -121,7 +123,9 @@ async def _codex_turn(thread_id, cwd, text, on_event, loop) -> bool:
 
     engine = _codex_engines.get(thread_id)
     if engine is None:
-        engine = CodexEngine(cwd, on_event, _turn_complete)
+        engine = CodexEngine(
+            cwd, on_event, _turn_complete, session_id=(initial_session_id or None)
+        )
         _codex_engines[thread_id] = engine
     else:
         engine.on_event = on_event
@@ -436,7 +440,13 @@ def handle_host_command(
                         def on_event(step_text: str) -> None:
                             loop.call_soon_threadsafe(_enqueue_reply, step_text, False)
 
-                        is_err = await _codex_turn(thread_id, cwd, text, on_event, loop)
+                        # `started` + a session id means the operator's Codex
+                        # session was discovered at dispatch — bind (resume) it.
+                        bind_id = claude_session_id if started else ""
+                        is_err = await _codex_turn(
+                            thread_id, cwd, text, on_event, loop,
+                            initial_session_id=bind_id,
+                        )
                         if is_err:
                             _enqueue_reply("(codex engine: turn failed)", True)
                         result = {"is_error": is_err}
