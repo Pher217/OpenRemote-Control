@@ -139,3 +139,31 @@ class TestCrashMarksTurnError:
             assert col.turns == [True]
         finally:
             engine.stop()
+
+
+class TestBindInitialSessionIdResumesOnFirstTurn:
+    def test_bind_initial_session_id_resumes_on_first_turn(self, monkeypatch):
+        """
+        GIVEN a CodexEngine constructed with session_id='preexisting-sess'
+        WHEN the first send() runs
+        THEN the fake_codex sees 'resume' in argv and reports thread_id
+        'codex-resumed', so after the turn engine._session_id=='codex-resumed',
+        the reply 'echo:hi' was emitted, and turns==[False].
+        """
+        col = Collector()
+        monkeypatch.setenv("ORC_CODEX_BIN", FAKE)
+        monkeypatch.setenv("FAKE_CODEX_MODE", "echo")
+        engine = CodexEngine(
+            "/tmp",
+            on_event=col.on_event,
+            on_turn_complete=col.on_turn_complete,
+            session_id="preexisting-sess",
+        )
+        try:
+            engine.send("hi")
+            assert col.wait()
+            assert engine._session_id == "codex-resumed"
+            assert "echo:hi" in col.events
+            assert col.turns == [False]
+        finally:
+            engine.stop()

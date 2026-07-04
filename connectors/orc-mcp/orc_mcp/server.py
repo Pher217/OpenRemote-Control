@@ -52,6 +52,17 @@ def _serve() -> None:
             )
             else "claude"
         )
+        codex_bound = False
+        if provider == "codex":
+            # Bind to the operator's CURRENT Codex session (snapshot handoff):
+            # discover its id from the rollout matching this cwd and resume it,
+            # so the phone chat continues with full context. None → fresh.
+            from orc_mcp.codex_discovery import find_codex_session  # noqa: PLC0415
+
+            codex_sid = find_codex_session(workspace_root)
+            if codex_sid:
+                claude_session_id = codex_sid  # reuse the session-id slot
+                codex_bound = True
         result = client.start_remote_control(
             name,
             claude_session_id=claude_session_id,
@@ -60,6 +71,14 @@ def _serve() -> None:
         )
         if result.startswith("["):
             return result
+        if provider == "codex":
+            note = (
+                " (bound to your current Codex session — a forked snapshot; your "
+                "editor won't see phone turns, so don't drive from both at once)"
+                if codex_bound
+                else " (couldn't identify your Codex session — started fresh)"
+            )
+            return f"Remote-control session dispatched to your chat: {result}{note}"
         return f"Remote-control session dispatched to your chat: {result}"
 
     @mcp.tool()
