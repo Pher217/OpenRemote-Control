@@ -229,6 +229,36 @@ def _compose_session_name(tool: str, workspace_root: str, name: str) -> str:
     return " · ".join(parts)[:255]
 
 
+def _select_drive_host(hostname: str = ""):
+    """Pick the host to bind a driveable session to.
+
+    Single host → that host (unchanged). Multiple hosts (e.g. a Mac + a Windows
+    box enrolled to one backend) → match the caller's hostname to a Host.name,
+    normalised (drop domain suffix, case-insensitive). Ambiguous/no-match with
+    multiple hosts → None (non-driveable) so a session is never bound to the
+    wrong machine.
+    """
+    from apps.hosts.models import Host  # noqa: PLC0415
+
+    hosts = list(Host.objects.all())
+    if len(hosts) == 1:
+        return hosts[0]
+    if not hosts or not hostname:
+        return None
+
+    def _norm(s: str) -> str:
+        return (s or "").split(".")[0].strip().lower()
+
+    hint = _norm(hostname)
+    if not hint:
+        return None
+    exact = [h for h in hosts if _norm(h.name) == hint]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [h for h in hosts if _norm(h.name) in hint or hint in _norm(h.name)]
+    return partial[0] if len(partial) == 1 else None
+
+
 def start_session(
     connector_id: str,
     tool: str,
@@ -236,6 +266,7 @@ def start_session(
     name: str,
     claude_session_id: str = "",
     provider: str = "claude",
+    hostname: str = "",
 ) -> dict:
     """Start a new remote-control session and dispatch it to the operator's chat.
 
@@ -265,7 +296,6 @@ def start_session(
     # and the reply streams back into the same topic. Single-host local deploy
     # binds to the sole enrolled host. If no host is enrolled we cannot drive, so
     # fall back to a read-only API thread (and the operator is told to enrol a host).
-    from apps.hosts.models import Host  # noqa: PLC0415 — avoid app-load cycle
 
     # Only auto-bind to a host when it is UNAMBIGUOUS (single enrolled host — the
     # common local single-host deploy). With multiple hosts we cannot tell which
@@ -278,8 +308,7 @@ def start_session(
     # the TELEGRAM allowlist (handle_forum_reply), but a multi-tenant deployment
     # should add a per-connector "drive" scope before enabling this. Acceptable for
     # the single-user local deploy this targets.
-    hosts = list(Host.objects.all()[:2])
-    host = hosts[0] if len(hosts) == 1 else None
+    host = _select_drive_host(hostname)
     if host is not None:
         # Bind to the caller's own session when its id is known, so the first
         # Telegram reply resumes THIS conversation (claude_session_started=True

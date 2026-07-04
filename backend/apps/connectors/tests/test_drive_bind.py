@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from apps.connectors.service import start_session
+from apps.connectors.service import _select_drive_host, start_session
 from apps.hosts.models import Host
 from apps.threads.models import Thread
 
@@ -79,3 +79,56 @@ def test_start_session_mints_fresh_id_when_unbound(telegram_forum, host):
     assert thread.metadata["claude_session_id"]  # some uuid
     assert thread.metadata["claude_session_id"] != ""
     assert thread.metadata["claude_session_started"] is False
+
+
+# ---------------------------------------------------------------------------
+# _select_drive_host — host resolution for driveable session binding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestSelectDriveHost:
+    def test_single_host_always_selected(self):
+        """
+        GIVEN a single enrolled Host 'MacBook-Pro'
+        WHEN  _select_drive_host is called with any hostname (including empty)
+        THEN  that sole host is always returned.
+        """
+        only = Host.objects.create(slug="mbp", name="MacBook-Pro", os="darwin")
+
+        assert _select_drive_host("anything").id == only.id
+        assert _select_drive_host("").id == only.id
+
+    def test_multi_host_exact_match(self):
+        """
+        GIVEN two enrolled hosts 'MacBook-Pro' and 'GamingPH'
+        WHEN  _select_drive_host is called with a matching hostname
+        THEN  it returns the exact-match host (case-insensitive, domain stripped).
+        """
+        mbp = Host.objects.create(slug="mbp", name="MacBook-Pro", os="darwin")
+        gaming = Host.objects.create(slug="gph", name="GamingPH", os="win32")
+
+        assert _select_drive_host("GamingPH").id == gaming.id
+        assert _select_drive_host("MacBook-Pro.local").id == mbp.id
+
+    def test_multi_host_no_hostname_returns_none(self):
+        """
+        GIVEN two enrolled hosts
+        WHEN  _select_drive_host is called with an empty hostname
+        THEN  None is returned (ambiguous, non-driveable).
+        """
+        Host.objects.create(slug="mbp", name="MacBook-Pro", os="darwin")
+        Host.objects.create(slug="gph", name="GamingPH", os="win32")
+
+        assert _select_drive_host("") is None
+
+    def test_multi_host_unknown_hostname_returns_none(self):
+        """
+        GIVEN two enrolled hosts
+        WHEN  _select_drive_host is called with a hostname matching no host
+        THEN  None is returned (no match, non-driveable).
+        """
+        Host.objects.create(slug="mbp", name="MacBook-Pro", os="darwin")
+        Host.objects.create(slug="gph", name="GamingPH", os="win32")
+
+        assert _select_drive_host("SomeOtherBox") is None
