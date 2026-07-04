@@ -153,7 +153,16 @@ class OrcBackendClient:
         success, or a '[…]' sentinel on failure.
         """
         try:
-            body: dict[str, str] = {"name": name, "provider": provider}
+            import socket  # noqa: PLC0415
+
+            body: dict[str, str] = {
+                "name": name,
+                "provider": provider,
+                # Which machine this session runs on — the backend routes a
+                # driveable session to the matching enrolled host when more than
+                # one host is enrolled (Mac + Windows, etc.).
+                "hostname": socket.gethostname(),
+            }
             if claude_session_id:
                 body["claude_session_id"] = claude_session_id
             if workspace_root:

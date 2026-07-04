@@ -61,6 +61,7 @@ class StartView(ConnectorBaseView):
             name=d.get("name", ""),
             claude_session_id=d.get("claude_session_id", ""),
             provider=serializer.validated_data.get('provider') or 'claude',
+            hostname=d.get("hostname", ""),
         )
         return Response({"ok": True, **result}, status=201)
 
