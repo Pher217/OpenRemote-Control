@@ -52,6 +52,15 @@ Telegram API  ──(bot token, HTTPS)──▶  Backend (Django/Channels)
    Allow/Deny prompt in chat (`backend/apps/hostlink` approval flow +
    `host-agent/agent_host/sdk_session.py`), trading latency for a real
    per-action gate.
+4. **Messaging-gateway ↔ Backend (open review item).** Inbound messages from
+   the gateway sidecar (`backend/apps/gateway/service.py::handle_inbound`) are
+   authenticated by the **sidecar bearer token**, then dispatched for any
+   forwarded `(platform, chat_id)` — the Telegram allowlist does **not** apply
+   to this surface. Session-launching slash commands remain approval-gated,
+   but the exact drive-capability of gateway threads has not had a dedicated
+   security review. Until it has: treat the gateway token as root-equivalent
+   for the chat surface, keep gateway platforms disabled unless you need them,
+   and prefer dedicated (non-personal) accounts for linked bridges.
 
 ## Residual risks (accepted, not bugs)
 

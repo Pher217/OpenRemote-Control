@@ -85,7 +85,7 @@ The backend and host-agent daemon are implemented and tested: **~800 tests passi
 
 - **Sovereign / self-hosted** — no SaaS, no hosted middleman. Sessions, prompts, approvals, and credentials stay on hardware you own. The whole stack is OSS and self-hostable.
 - **Multi-host** — your MacBook, Windows workstation, and Linux VPS become one fleet, one inbox. A host daemon enrolls each machine over your private network.
-- **Multi-runtime** — Claude Code, Codex, and Gemini today via the runtime registry; any MCP tool via the bridge.
+- **Multi-runtime** — Claude Code today (dispatch, mirror, drive); other MCP-capable tools connect via the `orc-mcp` bridge; per-provider drive engines are on the roadmap.
 - **Two-way, not just a viewer** — agents ask, you answer; agents request, you approve — right from chat.
 - **Policy + approval + audit built in** — sensitivity-aware project profiles, risk-tiered approvals, and an append-only Postgres audit log across heterogeneous runtimes.
 - **Surfaces you already use** — Telegram today; the messaging-gateway connector fans out to WhatsApp, Slack, Discord, Signal, and iMessage.
@@ -142,17 +142,17 @@ See [`docker-compose.yml`](docker-compose.yml) and the [`Makefile`](Makefile) fo
 
 All free / OSS-friendly:
 
-- **Backend** — Django 5.1, DRF, Channels, Celery 5
+- **Backend** — Django 5.2, DRF, Channels, Celery 5
 - **Data plane** — PostgreSQL 16, Valkey 8, append-only audit log
 - **Surfaces** — Telegram; WhatsApp / Slack / Discord / Signal / iMessage via the messaging-gateway connector; MCP bridge for coding agents
-- **Host side** — Python 3.13 daemon, age-encrypted credential vault, ntfy push, faster-whisper voice, Tailscale / headscale connectivity
+- **Host side** — Python 3.13 daemon, Tailscale connectivity; headscale is an optional deploy path (`deploy/headscale/`); age-encrypted credential vault, ntfy push, and faster-whisper voice are planned
 - **Ops** — Docker Compose (dev), Caddy 2, OpenTelemetry → Loki + Tempo + Prometheus + Grafana
 
 ## Contributing
 
 The backend foundation is solid; the most useful contributions right now are about **reaching more tools and standing it up live**. Best first contributions:
 
-- **Add a runtime adapter** for another agent CLI — open a discussion describing its session lifecycle, auth modes, and the events/hooks it exposes.
+- **Add a per-provider drive engine or chat surface.** Contributions are wanted for per-provider drive engines and chat surfaces; open a discussion describing the tool's session lifecycle, auth modes, and the events/hooks it exposes.
 - **Test the deploy path** on your own self-hosted infrastructure and report where the docs fall short — the runbook is being written now, and real-world friction is invaluable.
 - **Improve the `orc-mcp` install docs** for Cursor, Codex, Claude Code, Copilot, and Kiro.
 - **Harden the security boundaries** — the vault, policy engine, secrets redactor, and approval flow get design review before changes; security-minded eyes are very welcome. See [SECURITY.md](SECURITY.md) and [`docs/security/`](docs/security/).

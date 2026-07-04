@@ -8,6 +8,11 @@ LA="$HOME/Library/LaunchAgents"
 DOM="gui/$(id -u)"
 SVCS=(com.openremote.daphne com.openremote.bot com.openremote.daemon)
 
+if [[ ! -f "$DIR/orc-stack.env" ]]; then
+    echo "Copy $DIR/orc-stack.env.example to $DIR/orc-stack.env and edit it before running this script." >&2
+    exit 1
+fi
+
 # shellcheck disable=SC1091
 source "$DIR/orc-stack.env"
 ORC_LOGS="${ORC_LOGS:-$HOME/Library/Logs/orc-stack}"
