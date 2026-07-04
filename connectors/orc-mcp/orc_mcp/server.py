@@ -43,10 +43,20 @@ def _serve() -> None:
             workspace_root = os.getcwd()
         except OSError:
             workspace_root = ""
+        provider = (
+            "codex"
+            if claude_session_id == ""
+            and (
+                os.environ.get("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
+                or os.environ.get("CODEX_SHELL")
+            )
+            else "claude"
+        )
         result = client.start_remote_control(
             name,
             claude_session_id=claude_session_id,
             workspace_root=workspace_root,
+            provider=provider,
         )
         if result.startswith("["):
             return result
@@ -102,12 +112,12 @@ def _pair(args: list[str]) -> None:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Paired successfully.")
+    print("Paired successfully.")
     print(f"  connector_id : {result['connector_id']}")
     print(f"  key_id       : {result['key_id']}")
     print(f"  backend      : {backend_url}")
-    print(f"Ed25519 key saved to ~/.config/openremote-control/connector_key")
-    print(f"No shared secret needed — set ORC_BACKEND_URL, omit ORC_CONNECTOR_TOKEN.")
+    print("Ed25519 key saved to ~/.config/openremote-control/connector_key")
+    print("No shared secret needed — set ORC_BACKEND_URL, omit ORC_CONNECTOR_TOKEN.")
 
 
 def main() -> None:

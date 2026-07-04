@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
-import pathlib
 
 import httpx
 import pytest
 
 from orc_mcp.client import OrcBackendClient
 from orc_mcp.pair import pair
-from orc_mcp.signing import generate_keypair, load_or_create_identity, save_identity
+from orc_mcp.signing import generate_keypair, load_or_create_identity
 
 
 # ---------------------------------------------------------------------------

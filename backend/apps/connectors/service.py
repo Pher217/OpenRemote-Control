@@ -200,6 +200,7 @@ def _ensure_session_topic(thread, session_name: str) -> None:
         logger.exception("start_session: topic creation failed; falling back to broadcast")
         _broadcast_text(f"🎮 Remote-control session started: {session_name}")
 
+
 def _compose_session_name(tool: str, workspace_root: str, name: str) -> str:
     """Readable session name.
 
@@ -234,6 +235,7 @@ def start_session(
     workspace_root: str,
     name: str,
     claude_session_id: str = "",
+    provider: str = "claude",
 ) -> dict:
     """Start a new remote-control session and dispatch it to the operator's chat.
 
@@ -295,6 +297,7 @@ def start_session(
                 "claude_session_started": bool(claude_session_id),
                 "cwd": workspace_root or "",
                 "host_name": host.name,
+                "provider": provider,
             },
         )
         try:
