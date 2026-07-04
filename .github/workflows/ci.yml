@@ -81,25 +81,34 @@ jobs:
         working-directory: host-agent
         run: python -m pytest
 
-  # The Next.js PWA is scaffolded but not yet built — these steps are
-  # intentionally advisory (`|| true`). Make them blocking once the
-  # frontend is implemented.
-  frontend:
+  orc-mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: connectors/orc-mcp/pyproject.toml
+      - name: Install orc-mcp dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e 'connectors/orc-mcp[dev]'
+      - name: Run tests
+        run: python -m pytest connectors/orc-mcp/tests -q
+
+  messaging-gateway:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci || npm install
-      - name: Lint (advisory)
-        working-directory: frontend
-        run: npm run lint || true
-      - name: Type check (advisory)
-        working-directory: frontend
-        run: npm run typecheck || true
-      - name: Build (advisory)
-        working-directory: frontend
-        run: npm run build || true
+          node-version: 20
+          cache: npm
+          cache-dependency-path: connectors/messaging-gateway/package-lock.json
+      - name: Install messaging-gateway dependencies
+        working-directory: connectors/messaging-gateway
+        run: npm ci
+      - name: Run tests
+        working-directory: connectors/messaging-gateway
+        run: npm test

@@ -202,7 +202,11 @@ async def test_run_sender_drains_queued_events(tmp_path):
         cfg, queue, connect=_cm_connect([fake_ws], stop_event=stop), stop=stop
     )
 
-    raw_values = [ev["data"]["raw"] for ev in fake_ws.sent]
+    # A session.pty_reconcile frame is sent unconditionally on connect (see
+    # _build_reconcile_frame) — filter it out to isolate the drained events.
+    raw_values = [
+        ev["data"]["raw"] for ev in fake_ws.sent if ev["type"] == "session.line"
+    ]
     assert "line1" in raw_values
     assert "line2" in raw_values
     assert len(queue) == 0
@@ -275,7 +279,8 @@ async def test_drain_oversized_only_queue_is_cleared(tmp_path):
     """
     GIVEN an offline queue containing ONLY an oversized event
     WHEN run_sender() drains it
-    THEN nothing is sent and the queue ends up empty (not poisoned).
+    THEN nothing but the unconditional connect-time reconcile frame is sent,
+         and the queue ends up empty (not poisoned).
     """
     from agent_host.wsclient import MAX_EVENT_BYTES
 
@@ -290,7 +295,11 @@ async def test_drain_oversized_only_queue_is_cleared(tmp_path):
         cfg, queue, connect=_cm_connect([fake_ws], stop_event=stop), stop=stop
     )
 
-    assert fake_ws.sent == []
+    # session.pty_reconcile is sent unconditionally on connect (see
+    # _build_reconcile_frame) — the oversized queued event must not be among
+    # what was actually sent.
+    non_reconcile = [ev for ev in fake_ws.sent if ev["type"] != "session.pty_reconcile"]
+    assert non_reconcile == []
     assert len(queue) == 0
 
 

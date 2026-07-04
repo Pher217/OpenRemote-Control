@@ -16,7 +16,7 @@ It's sovereign by design: you host it, your sessions and credentials never leave
  Claude Code / Codex / Cursor …                                  Telegram
    /openremote-control      ──▶                                  WhatsApp / Slack /
  host-agent (each machine)  ──▶  ──▶  one chat session per  ◀─▶  Discord / Signal /
- observe (read-only tail)   ──▶       agent · policy ·            iMessage
+ drive + mirror             ──▶       agent · policy ·            iMessage
    via orc-mcp dispatch              approvals · audit
 ```
 
@@ -30,7 +30,7 @@ It starts a named session and pushes it out to your app of choice; from then on 
 
 Agents reach that same chat two ways:
 
-1. **Observe** — a read-only watcher tails your existing agent sessions (Claude Code, Codex, Gemini) and surfaces each as a chat. Nothing is hijacked; the watcher reads, it doesn't drive.
+1. **Chat topics** — sessions are dispatched to a chat topic that both streams the turns and accepts input that drives the session ([PR #90](https://github.com/Pher217/OpenRemote-Control/pull/90)).
 2. **The universal MCP bridge (`orc-mcp`)** — a small MCP server you install into *any* MCP-capable tool (Cursor, Copilot, Codex, Claude Code, Kiro, …). It is purely a **dispatch tool**: the agent gains four calls that route through *your* backend into the same chat —
    - `openremote_control(name)` — start a session and dispatch it to your chat app
    - `notify(message)` — push progress to your chat
@@ -46,7 +46,7 @@ backend/              Django + DRF + Channels control plane (ASGI)
   apps/
     accounts hosts projects     fleet inventory: agent accounts, machines, projects
     threads prompts approvals    session primitives: conversations, answer-in-chat, gated actions
-    observe                      read-only watcher + per-agent runtime adapters (runtimes/)
+    observe                      turn persistence + chat delivery for driven sessions (the multi-runtime read-only watcher was removed — see PR #90)
     hostlink                     host-daemon enrollment + PTY/command WebSocket consumer
     connectors gateway           universal MCP bridge backend + messaging-gateway backend
     telegram slash supervisor    Telegram surface, slash commands, fleet-aware digest
@@ -59,15 +59,17 @@ connectors/
 deploy/               Docker Compose, Caddy, and headscale deployment configs
 ```
 
-## Status — backend foundation in place
+## Status — write+stream driving is live
 
-The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenRemote-Control/pull/1)–[#6](https://github.com/Pher217/OpenRemote-Control/pull/6) merged, **~438 tests passing**, live ASGI smoke test green.
+The backend and host-agent daemon are implemented and tested: **~800 tests passing** (542 backend, 262 host-agent), live ASGI smoke test green.
 
 **Shipped:**
 
-- Multi-runtime **observe** (Claude Code / Codex / Gemini) via a pluggable runtime registry
-- Interactive **answer-in-chat** (the `Prompt` primitive)
-- The universal **`/openremote-control`** command — run it inside your coding agent to dispatch that session to your chat app (the `openremote_control` orc-mcp tool + a shipped Claude Code command)
+- Session dispatch to a **Telegram forum topic** via the universal **`/openremote-control`** command (the `openremote_control` orc-mcp tool + a shipped Claude Code command)
+- **Bind-to-calling-session** — driving *this* Claude Code session from chat via `CLAUDE_CODE_SESSION_ID` ([PR #91](https://github.com/Pher217/OpenRemote-Control/pull/91))
+- A **scoped editor-turn mirror** with drive suppression, so typed-in-editor turns and chat-driven turns never double-post ([PR #93](https://github.com/Pher217/OpenRemote-Control/pull/93), [PR #94](https://github.com/Pher217/OpenRemote-Control/pull/94))
+- A **persistent interactive engine** (`ORC_HEADLESS_ENGINE=interactive`) — one long-lived `claude -p` stream-json process per session, warm multi-turn replies, and restart survival ([PR #95](https://github.com/Pher217/OpenRemote-Control/pull/95), [PR #96](https://github.com/Pher217/OpenRemote-Control/pull/96))
+- A **bot liveness watchdog** so a stuck Telegram `getUpdates` consumer is caught and restarted ([PR #97](https://github.com/Pher217/OpenRemote-Control/pull/97))
 - The **universal MCP bridge** — `apps.connectors` backend + the installable [`orc-mcp`](connectors/orc-mcp/README.md) client
 - **Telegram** surface + the **messaging-gateway** connector (→ WhatsApp / Slack / Discord / Signal / iMessage)
 - **Multi-host** backend (`apps.hostlink`) + a **host daemon client** (`host-agent`: `orc-host enroll | daemon`)
@@ -83,7 +85,7 @@ The backend is implemented and tested: PRs [#1](https://github.com/Pher217/OpenR
 
 - **Sovereign / self-hosted** — no SaaS, no hosted middleman. Sessions, prompts, approvals, and credentials stay on hardware you own. The whole stack is OSS and self-hostable.
 - **Multi-host** — your MacBook, Windows workstation, and Linux VPS become one fleet, one inbox. A host daemon enrolls each machine over your private network.
-- **Multi-runtime** — Claude Code, Codex, and Gemini today via the runtime registry; any MCP tool via the bridge.
+- **Multi-runtime** — Claude Code today (dispatch, mirror, drive); other MCP-capable tools connect via the `orc-mcp` bridge; per-provider drive engines are on the roadmap.
 - **Two-way, not just a viewer** — agents ask, you answer; agents request, you approve — right from chat.
 - **Policy + approval + audit built in** — sensitivity-aware project profiles, risk-tiered approvals, and an append-only Postgres audit log across heterogeneous runtimes.
 - **Surfaces you already use** — Telegram today; the messaging-gateway connector fans out to WhatsApp, Slack, Discord, Signal, and iMessage.
@@ -140,17 +142,17 @@ See [`docker-compose.yml`](docker-compose.yml) and the [`Makefile`](Makefile) fo
 
 All free / OSS-friendly:
 
-- **Backend** — Django 5.1, DRF, Channels, Celery 5
+- **Backend** — Django 5.2, DRF, Channels, Celery 5
 - **Data plane** — PostgreSQL 16, Valkey 8, append-only audit log
 - **Surfaces** — Telegram; WhatsApp / Slack / Discord / Signal / iMessage via the messaging-gateway connector; MCP bridge for coding agents
-- **Host side** — Python 3.13 daemon, age-encrypted credential vault, ntfy push, faster-whisper voice, Tailscale / headscale connectivity
+- **Host side** — Python 3.13 daemon, Tailscale connectivity; headscale is an optional deploy path (`deploy/headscale/`); age-encrypted credential vault, ntfy push, and faster-whisper voice are planned
 - **Ops** — Docker Compose (dev), Caddy 2, OpenTelemetry → Loki + Tempo + Prometheus + Grafana
 
 ## Contributing
 
 The backend foundation is solid; the most useful contributions right now are about **reaching more tools and standing it up live**. Best first contributions:
 
-- **Add a runtime adapter** for another agent CLI — open a discussion describing its session lifecycle, auth modes, and the events/hooks it exposes.
+- **Add a per-provider drive engine or chat surface.** Contributions are wanted for per-provider drive engines and chat surfaces; open a discussion describing the tool's session lifecycle, auth modes, and the events/hooks it exposes.
 - **Test the deploy path** on your own self-hosted infrastructure and report where the docs fall short — the runbook is being written now, and real-world friction is invaluable.
 - **Improve the `orc-mcp` install docs** for Cursor, Codex, Claude Code, Copilot, and Kiro.
 - **Harden the security boundaries** — the vault, policy engine, secrets redactor, and approval flow get design review before changes; security-minded eyes are very welcome. See [SECURITY.md](SECURITY.md) and [`docs/security/`](docs/security/).

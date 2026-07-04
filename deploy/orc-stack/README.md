@@ -25,8 +25,11 @@ launchctl kickstart -k gui/$(id -u)/com.openremote.daemon   # restart one servic
 Logs: `~/Library/Logs/orc-stack/{daphne,bot,daemon}.log`.
 
 ## Rollback the driving engine
-`ORC_HEADLESS_ENGINE=sdk` (default) → Agent-SDK path with Allow/Deny tool buttons.
-Unset it in `orc-stack.env` → legacy `claude -p` path. Kickstart the daemon after.
+`ORC_HEADLESS_ENGINE=interactive` (default) is the recommended default: one
+persistent `claude` stream-json process per session, no per-tool gate,
+trusted-host mode. Set `ORC_HEADLESS_ENGINE=sdk` for the Agent-SDK path with
+per-tool Allow/Deny approval buttons. Unset it in `orc-stack.env` to fall back
+to the legacy `claude -p` path. Kickstart the daemon after.
 
 ## Not covered (follow-ups)
 - Windows supervisor (Task Scheduler / NSSM) — see the cross-platform spec.

@@ -66,8 +66,36 @@ Out of scope:
 - Social engineering attacks against individual users.
 - LLM provider platforms (Anthropic, OpenAI, Google, etc.) — report to them directly.
 
+## Trust Model — read this before self-hosting
+
+OpenRemote-Control's core feature is **remote code execution by design**: a message in
+your chat surface drives a coding agent on your machine. The default engine runs
+`claude` with `--permission-mode bypassPermissions` — no per-tool approval gate.
+This is **trusted-host mode**, and it is a deliberate trade-off, not an oversight:
+
+- The threat model assumes a **single operator, self-hosting on a machine they own**,
+  driving **their own** coding sessions from **their own** chat account.
+- The gate is **identity, not per-action review**: on the **Telegram surface**,
+  only user ids in `TELEGRAM_ALLOWED_CHAT_IDS` can drive sessions, and the
+  allowlist **defaults to deny-all** when unset. Host daemons must enroll and
+  sign every WebSocket connection (HMAC over `host_id:ts:nonce`, constant-time
+  compare, nonce replay rejection — `backend/apps/hostlink/security.py`).
+- The **messaging-gateway surface** (WhatsApp/Slack/Discord/Signal/iMessage) is
+  gated by the sidecar's bearer token, **not** by the Telegram allowlist —
+  treat that token as equivalent to an allowlist entry, and do not enable
+  gateway surfaces until you have reviewed who can message the linked accounts
+  (see the threat model for the open review item on this path).
+- Consequences you accept: **anyone on the allowlist can execute code on the
+  enrolled host**, and a compromised Telegram account of an allowlisted user
+  equals code execution. Keep the allowlist minimal, use a dedicated bot token,
+  and rotate it on any suspicion.
+- If you want a per-action gate, run `ORC_HEADLESS_ENGINE=sdk`, which routes every
+  tool call through an Allow/Deny prompt in the chat before it executes.
+
+**Do not deploy this multi-tenant.** There is no per-connector "drive" scope yet;
+the design target is one operator per backend.
+
 ## Security-Related Resources
 
 - Threat model: [`docs/security/threat-model.md`](docs/security/threat-model.md)
 - Security checklist: [`docs/security/security-checklist.md`](docs/security/security-checklist.md)
-- Security gates and acceptance tests: See the T-104 deliverables in `docs/security/`.
