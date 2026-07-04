@@ -26,7 +26,7 @@ jobs:
       valkey:
         image: valkey/valkey:8
         options: >-
-          --health-cmd "echo PING | nc -w 3 localhost 6379 | grep -q PONG"
+          --health-cmd "valkey-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5

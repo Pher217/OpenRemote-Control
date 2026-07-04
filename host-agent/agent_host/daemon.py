@@ -16,6 +16,7 @@ All heavy logic lives in the other modules; this file just wires them together.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -57,10 +58,8 @@ def run(cfg: HostConfig) -> None:
     # Immediately drop persisted names whose tmux session died while the daemon
     # was down, so a reused name can't be double-injected before the first
     # reconcile cycle. Best-effort: if tmux can't be enumerated, reconcile prunes.
-    try:
+    with contextlib.suppress(Exception):
         prune_to_live(PtySession().list_live_sessions())
-    except Exception:
-        pass
 
     async def _main() -> None:
         sender_task = asyncio.create_task(run_sender(cfg, queue, stop=stop))
