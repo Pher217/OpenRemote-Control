@@ -24,7 +24,7 @@ services:
     volumes:
       - valkey-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "echo PING | nc -w 3 localhost 6379 | grep -q PONG"]
+      test: ["CMD", "valkey-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5

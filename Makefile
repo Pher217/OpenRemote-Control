@@ -1,8 +1,11 @@
-.PHONY: install test lint fmt doctor bootstrap-local dev backend-install host-install
+.PHONY: quickstart install test lint fmt doctor bootstrap-local dev backend-install host-install
 
 PYTHON := python
 NODE := node
 NPM := npm
+
+quickstart:
+	@bash quickstart.sh
 
 install: backend-install host-install
 	@echo "All components installed."
