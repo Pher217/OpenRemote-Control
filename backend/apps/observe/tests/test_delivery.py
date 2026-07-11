@@ -1,3 +1,5 @@
+import logging
+
 import httpx
 import pytest
 from asgiref.sync import sync_to_async
@@ -827,3 +829,75 @@ async def test_stale_topic_is_recreated_and_redelivered():
         return Thread.objects.get(id=thread.id).metadata.get("telegram_topic_id")
 
     assert await _stored_topic() == new_topic_id
+
+
+# ── Tests for driveable-thread missing-topic recreation vs dedup ───────────────
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_driveable_thread_missing_topic_logs_warning_and_recreates(caplog):
+    """
+    GIVEN a driveable thread (claude_session_id set) whose telegram_topic_id went
+          missing after dispatch
+    WHEN  one assistant turn is delivered
+    THEN  exactly one fresh topic is created and a "recreating a fresh topic"
+          warning is logged.
+    """
+    fake = _FakeApi()
+    thread = await database_sync_to_async(_make_thread)(
+        "Sdrvso01", "/tmp/drv_solo.jsonl"
+    )
+    thread.metadata["claude_session_id"] = "sess-solo"
+    await database_sync_to_async(thread.save)(update_fields=["metadata"])
+
+    turn = {"role": "assistant", "text": "hello", "uuid": "1", "session_id": "Sdrvso01"}
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        caplog.set_level(logging.WARNING)
+        await deliver_turn(thread, turn, None, forum_chat_id=-100999, api=fake)
+
+    assert len(fake.create_calls) == 1
+    assert "recreating a fresh topic" in caplog.text
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_driveable_thread_skips_duplicate_topic_when_sibling_owns_one(caplog):
+    """
+    GIVEN a sibling thread_a that already owns a live topic for claude_session_id
+          "sess-dup", and a driveable thread_b sharing the same session id but
+          with no telegram_topic_id of its own
+    WHEN  one assistant turn is delivered for thread_b
+    THEN  no new topic is created, a "skipping duplicate topic creation" warning
+          is logged, and thread_b.metadata still has no telegram_topic_id.
+    """
+    fake = _FakeApi()
+    thread_a = await database_sync_to_async(_make_thread)(
+        "Sdrva001", "/tmp/drv_a.jsonl"
+    )
+    thread_a.metadata["claude_session_id"] = "sess-dup"
+    thread_a.metadata["telegram_topic_id"] = 999
+    thread_a.metadata["telegram_forum_chat_id"] = -100999
+    await database_sync_to_async(thread_a.save)(update_fields=["metadata"])
+
+    thread_b = await database_sync_to_async(_make_thread)(
+        "Sdrvb001", "/tmp/drv_b.jsonl"
+    )
+    thread_b.metadata["claude_session_id"] = "sess-dup"
+    await database_sync_to_async(thread_b.save)(update_fields=["metadata"])
+
+    turn = {"role": "assistant", "text": "hello", "uuid": "1", "session_id": "Sdrvb001"}
+
+    with override_settings(OBSERVE_DELIVERY_MODE="progress"):
+        caplog.set_level(logging.WARNING)
+        await deliver_turn(thread_b, turn, None, forum_chat_id=-100999, api=fake)
+
+    assert len(fake.create_calls) == 0
+    assert "skipping duplicate topic creation" in caplog.text
+
+    @database_sync_to_async
+    def _b_topic_id():
+        return Thread.objects.get(id=thread_b.id).metadata.get("telegram_topic_id")
+
+    assert await _b_topic_id() is None

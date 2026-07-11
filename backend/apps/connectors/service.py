@@ -5,11 +5,13 @@ between coding-agent sessions and the operator's connector chat surfaces.
 Best-effort delivery is attempted to the active messaging platform.
 """
 
+import hashlib
 import logging
 import os
 import uuid
 
 from asgiref.sync import async_to_sync
+from django.db import connection, transaction
 from django.db.models import Max
 from django.utils import timezone
 
@@ -190,10 +192,21 @@ def _ensure_session_topic(thread, session_name: str) -> None:
         }
         thread.save(update_fields=["metadata"])
 
+        if thread.metadata.get("headless") is False:
+            body_text = (
+                f"🎮 Remote-control session started: {session_name}\n"
+                "This session is stream-only — replies here won't reach it "
+                "(it's running inside an editor extension, not a driveable "
+                "CLI/headless session)."
+            )
+        else:
+            body_text = (
+                f"🎮 Remote-control session started: {session_name}\n"
+                "Reply in this topic to talk to the session."
+            )
         async_to_sync(send_message)(
             forum_chat_id,
-            f"🎮 Remote-control session started: {session_name}\n"
-            "Reply in this topic to talk to the session.",
+            body_text,
             message_thread_id=topic_id,
         )
     except Exception:
@@ -259,6 +272,39 @@ def _select_drive_host(hostname: str = ""):
     return partial[0] if len(partial) == 1 else None
 
 
+def _find_existing_session_thread(claude_session_id: str):
+    """Return the active Thread already bound to this claude_session_id, if any."""
+    if not claude_session_id:
+        return None
+    return (
+        Thread.objects.filter(
+            runtime_mode=Thread.RuntimeModeChoices.PTY,
+            status__in=[
+                Thread.StatusChoices.PENDING,
+                Thread.StatusChoices.STARTING,
+                Thread.StatusChoices.RUNNING,
+                Thread.StatusChoices.WAITING_APPROVAL,
+            ],
+            metadata__claude_session_id=claude_session_id,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def _session_lock_key(claude_session_id: str) -> int:
+    """Stable bigint for pg_advisory_xact_lock, derived from the session id.
+
+    Postgres advisory locks take a bigint, not an arbitrary string; a lock keyed
+    by session id (rather than a row lock) is required because the row a
+    concurrent start_session() call would find/create may not exist yet — a row
+    lock can't prevent two callers from both seeing "no row" and both creating
+    one. 15 hex chars = 60 bits, safely within signed 64-bit bigint range.
+    """
+    digest = hashlib.sha256(claude_session_id.encode()).hexdigest()
+    return int(digest[:15], 16)
+
+
 def start_session(
     connector_id: str,
     tool: str,
@@ -267,6 +313,7 @@ def start_session(
     claude_session_id: str = "",
     provider: str = "claude",
     hostname: str = "",
+    entrypoint: str = "",
 ) -> dict:
     """Start a new remote-control session and dispatch it to the operator's chat.
 
@@ -281,6 +328,14 @@ def start_session(
     THAT existing session — so a Telegram reply runs ``claude -p --resume <id>``
     and continues *this* conversation rather than spinning up a fresh one. When
     omitted, a new session id is minted (a standalone driveable session).
+
+    When ``entrypoint`` is ``"claude-vscode"`` (the caller is a
+    VSCode-extension-hosted Claude Code session), the dispatched thread is marked
+    non-driveable (``metadata["headless"] = False``) even though a host was
+    selected — such a session cannot be safely ``--resume``d without spawning a
+    detached process that diverges from what the operator sees in their editor.
+    This is a best-effort, denylist-based check on a specific known-unsafe origin,
+    not a full trust boundary; other origins remain driveable exactly as before.
     """
     account, _ = Account.objects.get_or_create(
         provider=tool or "connector",
@@ -314,21 +369,50 @@ def start_session(
         # Telegram reply resumes THIS conversation (claude_session_started=True
         # makes run_headless try --resume first); otherwise mint a fresh session.
         bound_id = claude_session_id or str(uuid.uuid4())
-        thread = Thread.objects.create(
-            name=session_name,
-            runtime=tool or "claude",
-            runtime_mode=Thread.RuntimeModeChoices.PTY,
-            account=account,
-            host=host,
-            metadata={
-                "headless": True,
-                "claude_session_id": bound_id,
-                "claude_session_started": bool(claude_session_id),
-                "cwd": workspace_root or "",
-                "host_name": host.name,
-                "provider": provider,
-            },
-        )
+        is_driveable_origin = entrypoint != "claude-vscode"
+        # pg_advisory_xact_lock, not a row lock: the lookup below can legitimately
+        # find nothing (row doesn't exist yet), so two concurrent calls for the
+        # same claude_session_id must serialize on the session id itself, not on
+        # a row that may not exist until one of them creates it.
+        with transaction.atomic():
+            if claude_session_id:
+                with connection.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(%s)", [_session_lock_key(bound_id)]
+                    )
+            existing = _find_existing_session_thread(bound_id) if claude_session_id else None
+            if existing is not None:
+                thread = existing
+                thread.name = session_name
+                thread.host = host
+                thread.metadata = {
+                    **thread.metadata,
+                    "cwd": workspace_root or "",
+                    "host_name": host.name,
+                    "provider": provider,
+                    # Recomputed fresh each dispatch, same as at creation — a
+                    # session's origin doesn't change mid-life, so this just keeps
+                    # the reused thread's drive-gate consistent with the latest
+                    # known entrypoint rather than trusting stale metadata.
+                    "headless": is_driveable_origin,
+                }
+                thread.save(update_fields=["name", "host", "metadata", "updated_at"])
+            else:
+                thread = Thread.objects.create(
+                    name=session_name,
+                    runtime=tool or "claude",
+                    runtime_mode=Thread.RuntimeModeChoices.PTY,
+                    account=account,
+                    host=host,
+                    metadata={
+                        "headless": is_driveable_origin,
+                        "claude_session_id": bound_id,
+                        "claude_session_started": bool(claude_session_id),
+                        "cwd": workspace_root or "",
+                        "host_name": host.name,
+                        "provider": provider,
+                    },
+                )
         try:
             from apps.hostlink.service import (
                 send_host_command,  # noqa: PLC0415 — avoid app-load cycle
@@ -365,7 +449,8 @@ def start_session(
         instance.workspace_root = workspace_root or instance.workspace_root
         instance.save(update_fields=["thread", "workspace_root", "last_seen_at"])
 
-    _ensure_session_topic(thread, session_name)
+    if not (thread.metadata.get("telegram_topic_id") and thread.metadata.get("telegram_forum_chat_id")):
+        _ensure_session_topic(thread, session_name)
 
     return {"thread_id": str(thread.id), "name": session_name}
 

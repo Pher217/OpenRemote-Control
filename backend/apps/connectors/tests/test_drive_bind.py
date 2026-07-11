@@ -132,3 +132,135 @@ class TestSelectDriveHost:
         Host.objects.create(slug="gph", name="GamingPH", os="win32")
 
         assert _select_drive_host("SomeOtherBox") is None
+
+
+@pytest.mark.django_db
+def test_start_session_reuses_existing_thread_for_same_claude_session_id(telegram_forum, host):
+    """
+    GIVEN one enrolled host AND a caller-supplied claude_session_id
+    WHEN  start_session is called twice with the SAME claude_session_id
+    THEN  the returned thread_id is identical both times and only one Thread exists.
+    """
+    out1 = _patched_start(
+        "conn-dup-a",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id="e2b2c396-507b-4e1a-bc81-c23294821676",
+    )
+    out2 = _patched_start(
+        "conn-dup-b",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id="e2b2c396-507b-4e1a-bc81-c23294821676",
+    )
+
+    assert out1["thread_id"] == out2["thread_id"]
+    assert Thread.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_start_session_creates_new_thread_for_different_claude_session_id(telegram_forum, host):
+    """
+    GIVEN one enrolled host AND two distinct caller-supplied claude_session_ids
+    WHEN  start_session is called once with each id
+    THEN  the two returned thread_ids differ and two Threads exist.
+    """
+    out1 = _patched_start(
+        "conn-dup-c",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id="11111111-1111-1111-1111-111111111111",
+    )
+    out2 = _patched_start(
+        "conn-dup-d",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id="22222222-2222-2222-2222-222222222222",
+    )
+
+    assert out1["thread_id"] != out2["thread_id"]
+    assert Thread.objects.count() == 2
+
+
+
+@pytest.mark.django_db
+def test_start_session_marks_vscode_origin_as_non_driveable(telegram_forum, host):
+    """
+    GIVEN one enrolled host AND a caller-supplied claude_session_id
+          AND entrypoint="claude-vscode" (VSCode-extension-hosted session)
+    WHEN  start_session runs
+    THEN  the created thread is marked non-driveable (headless is False) —
+          such a session cannot be safely --resume'd without diverging from the
+          live editor session.
+    """
+    out = _patched_start(
+        "conn-vsc",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id="e2b2c396-507b-4e1a-bc81-c23294821676",
+        entrypoint="claude-vscode",
+    )
+
+    thread = Thread.objects.get(id=out["thread_id"])
+    assert thread.metadata["headless"] is False
+
+
+@pytest.mark.django_db
+def test_start_session_defaults_to_driveable_without_vscode_entrypoint(telegram_forum, host):
+    """
+    GIVEN one enrolled host AND a caller-supplied claude_session_id
+          with NO entrypoint (a normal CLI/headless session)
+    WHEN  start_session runs
+    THEN  the created thread remains driveable (headless is True) — unchanged.
+    """
+    out = _patched_start(
+        "conn-novsc",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id="e2b2c396-507b-4e1a-bc81-c23294821676",
+        entrypoint="",
+    )
+
+    thread = Thread.objects.get(id=out["thread_id"])
+    assert thread.metadata["headless"] is True
+
+
+@pytest.mark.django_db
+def test_start_session_reuse_recomputes_headless_from_latest_entrypoint(telegram_forum, host):
+    """
+    GIVEN a thread already dispatched as driveable (no entrypoint)
+    WHEN  start_session is called again for the SAME claude_session_id, this
+          time with entrypoint="claude-vscode"
+    THEN  the reused thread's headless flag flips to False — the reuse branch
+          must recompute the drive gate, not trust stale metadata from creation.
+    """
+    session_id = "e2b2c396-507b-4e1a-bc81-c23294821676"
+    out1 = _patched_start(
+        "conn-reuse-a",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id=session_id,
+        entrypoint="",
+    )
+    thread = Thread.objects.get(id=out1["thread_id"])
+    assert thread.metadata["headless"] is True
+
+    out2 = _patched_start(
+        "conn-reuse-b",
+        "claude_code",
+        "/Users/me/dev/proj",
+        "My session",
+        claude_session_id=session_id,
+        entrypoint="claude-vscode",
+    )
+
+    assert out2["thread_id"] == out1["thread_id"]
+    thread.refresh_from_db()
+    assert thread.metadata["headless"] is False

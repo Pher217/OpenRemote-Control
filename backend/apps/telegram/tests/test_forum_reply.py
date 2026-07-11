@@ -248,6 +248,37 @@ async def test_forum_reply_pty_session_without_host_is_read_only(settings):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+async def test_forum_reply_vscode_origin_headless_thread_is_read_only(settings):
+    """
+    GIVEN a PTY-mode thread WITH a host BUT headless=False (a vscode-origin
+          dispatch — start_session marks such sessions non-driveable)
+    WHEN  handle_forum_reply is called
+    THEN  a "doesn't accept typed input" reply is sent (stream-only, not driveable).
+    """
+    settings.TELEGRAM_ALLOWED_CHAT_IDS = {111}
+    settings.TELEGRAM_FORUM_CHAT_ID = "-100111"
+
+    account = await database_sync_to_async(_make_account)("vsc1")
+    host = await database_sync_to_async(_make_host)("host-vsc1")
+    thread = await database_sync_to_async(_make_thread)(
+        account,
+        runtime_mode=Thread.RuntimeModeChoices.PTY,
+        topic_id=77,
+        forum_chat_id=-100111,
+        host=host,
+    )
+    thread.metadata["headless"] = False
+    await database_sync_to_async(thread.save)()
+
+    send, calls = await _make_send()
+    await handle_forum_reply(-100111, 77, 111, "hello", send=send)
+
+    assert len(calls) == 1
+    assert "doesn't accept typed input" in calls[0]["text"].lower()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
 async def test_forum_reply_pty_session_with_host_and_tmux_creates_approval_prompt(settings):
     """
     GIVEN a PTY-mode thread with a host and a tmux_session_name (driveable session)

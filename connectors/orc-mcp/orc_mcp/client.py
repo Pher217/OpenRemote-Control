@@ -143,7 +143,7 @@ class OrcBackendClient:
 
     def start_remote_control(
         self, name: str = "", claude_session_id: str = "", workspace_root: str = "",
-        provider: str = "claude",
+        provider: str = "claude", entrypoint: str = "",
     ) -> str:
         """Start a remote-control session and dispatch it to the operator's chat.
 
@@ -151,6 +151,11 @@ class OrcBackendClient:
         session so Telegram replies resume THIS conversation; ``workspace_root`` is
         the cwd the resumed ``claude -p`` runs in. Returns the session name on
         success, or a '[…]' sentinel on failure.
+
+        ``entrypoint`` (e.g. CLAUDE_CODE_ENTRYPOINT) tells the backend whether this
+        call originates from a VSCode-extension-hosted session, which cannot be
+        safely drive-resumed — the backend uses this to avoid offering broken
+        write-drive.
         """
         try:
             import socket  # noqa: PLC0415
@@ -165,6 +170,8 @@ class OrcBackendClient:
             }
             if claude_session_id:
                 body["claude_session_id"] = claude_session_id
+            if entrypoint:
+                body["entrypoint"] = entrypoint
             if workspace_root:
                 body["workspace_root"] = workspace_root
             r = self._post("/api/connectors/start", body, _POST_TIMEOUT)

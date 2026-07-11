@@ -39,6 +39,7 @@ def _serve() -> None:
         # session id as CLAUDE_CODE_SESSION_ID to MCP-server subprocesses; cwd is
         # the workspace the resumed `claude -p` runs in.
         claude_session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+        entrypoint = os.environ.get("CLAUDE_CODE_ENTRYPOINT", "")
         try:
             workspace_root = os.getcwd()
         except OSError:
@@ -68,6 +69,7 @@ def _serve() -> None:
             claude_session_id=claude_session_id,
             workspace_root=workspace_root,
             provider=provider,
+            entrypoint=entrypoint,
         )
         if result.startswith("["):
             return result

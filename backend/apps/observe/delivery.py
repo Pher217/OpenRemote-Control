@@ -94,6 +94,28 @@ def _save_topic_id(thread, topic_id, color, forum_chat_id) -> None:
 
 
 @database_sync_to_async
+def _find_conflicting_topic_owner(thread):
+    """Return another active Thread that already owns a live topic for the same
+    claude_session_id as `thread`, if any. Used to avoid minting a duplicate
+    Telegram topic when this thread's own topic_id metadata went missing but a
+    sibling Thread (e.g. from a prior /openremote-control dispatch) still has one.
+    """
+    from apps.threads.models import Thread
+
+    session_id = thread.metadata.get("claude_session_id")
+    if not session_id:
+        return None
+    return (
+        Thread.objects.exclude(id=thread.id)
+        .filter(
+            metadata__claude_session_id=session_id,
+        )
+        .exclude(metadata__telegram_topic_id__isnull=True)
+        .first()
+    )
+
+
+@database_sync_to_async
 def _save_digest_state(thread, digest_message_id, digest_steps, digest_text=None) -> None:
     thread.metadata["telegram_digest_message_id"] = digest_message_id
     thread.metadata["telegram_digest_steps"] = digest_steps
@@ -148,6 +170,24 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
 
     existing, name, color = await _ensure_topic_id(thread, forum_chat_id)
     if existing is None:
+        is_driveable = bool(
+            thread.metadata.get("claude_session_id") or thread.metadata.get("headless")
+        )
+        if is_driveable:
+            conflict = await _find_conflicting_topic_owner(thread)
+            if conflict is not None:
+                log.warning(
+                    "observe.delivery: thread %s has no telegram_topic_id but thread %s "
+                    "already owns a live topic for the same claude_session_id — skipping "
+                    "duplicate topic creation and this turn's delivery",
+                    thread.id, conflict.id,
+                )
+                return
+            log.warning(
+                "observe.delivery: driveable thread %s has no telegram_topic_id "
+                "(went missing after dispatch) — recreating a fresh topic",
+                thread.id,
+            )
         topic_id = await api.create_forum_topic(forum_chat_id, name, color)
         await _save_topic_id(thread, topic_id, color, forum_chat_id)
         prov = thread.metadata.get("provider") or thread.runtime
