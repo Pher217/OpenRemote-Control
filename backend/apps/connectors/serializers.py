@@ -25,6 +25,7 @@ class StartSerializer(serializers.Serializer):
     )
     provider = serializers.CharField(max_length=32, default='claude', allow_blank=True)
     hostname = serializers.CharField(max_length=255, default="", allow_blank=True)
+    entrypoint = serializers.CharField(max_length=64, default="", allow_blank=True)
 
 
 class AskSerializer(serializers.Serializer):

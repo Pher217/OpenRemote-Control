@@ -85,6 +85,30 @@ def test_start_remote_control_omits_binding_when_absent():
     assert "claude_session_id" not in seen["body"]
 
 
+def test_start_remote_control_sends_entrypoint_when_present():
+    """entrypoint is forwarded so the backend knows this is a VSCode-extension session."""
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"ok": True, "thread_id": "t1", "name": "s"})
+
+    _make(handler).start_remote_control("s", entrypoint="claude-vscode")
+    assert seen["body"]["entrypoint"] == "claude-vscode"
+
+
+def test_start_remote_control_omits_entrypoint_when_absent():
+    """No entrypoint → no entrypoint key (normal CLI/headless session, unchanged)."""
+    seen = {}
+
+    def handler(req):
+        seen["body"] = json.loads(req.content)
+        return httpx.Response(201, json={"ok": True, "thread_id": "t1", "name": "s"})
+
+    _make(handler).start_remote_control("s")
+    assert "entrypoint" not in seen["body"]
+
+
 def test_start_remote_control_returns_sentinel_on_error():
     def handler(req):
         return httpx.Response(500)
