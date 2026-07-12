@@ -8,11 +8,15 @@ AI agents now run everywhere: laptops, VPSes, workstations, terminals, editors, 
 
 ## Demo
 
-<!-- Record a 20-40s screen capture: type in Claude Code -> it appears in your Telegram group -> reply from your phone -> it drives the session. Save it as docs/demo.gif, then delete the placeholder line below and uncomment the image line below. -->
+![One Telegram chat, every agent, every machine](docs/screenshots/telegram-fleet.png)
 
-> 🎥 **Demo coming soon** — a ~20-second clip: start a Claude Code session, then drive it from your phone.
+One Telegram group, one topic per session — Claude and Codex, running on a MacBook and a Windows box, streaming and driveable side by side. Approvals and questions (`request_approval`, `ask_human`) land right in the topic.
+
+<!-- Record a 20-40s screen capture: type in Claude Code -> it appears in your Telegram group -> reply from your phone -> it drives the session. Save it as docs/demo.gif, then uncomment the line below. -->
 
 <!-- ![Drive a Claude Code session from your phone](docs/demo.gif) -->
+
+> 🎥 **Animated demo coming soon** — a ~20-second clip: start a Claude Code session, then drive it from your phone.
 
 Think of the /remote-control built into some coding tools — then make it universal. OpenRemote Control is that, but for every coding agent, not just one: any tool, any machine, funnelled into one chat you already use. Agents **notify** you, **ask** you questions, and **request approval** — so you **start**, **stream**, **drive**, get notified, answer questions and approve actions for all of them in one place, without hunting down the right machine, terminal, or editor.
 
