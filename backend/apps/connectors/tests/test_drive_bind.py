@@ -264,3 +264,65 @@ def test_start_session_reuse_recomputes_headless_from_latest_entrypoint(telegram
     assert out2["thread_id"] == out1["thread_id"]
     thread.refresh_from_db()
     assert thread.metadata["headless"] is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_start_session_concurrent_dispatch_creates_only_one_topic(telegram_forum, host):
+    """
+    GIVEN one enrolled host AND a caller-supplied claude_session_id
+    WHEN  two start_session() calls race for the SAME claude_session_id on
+          separate threads/DB connections, with topic creation slowed down to
+          widen the window between the Thread-reuse lock releasing and the
+          topic-creation check running
+    THEN  only ONE Telegram topic is created and both calls return the same
+          thread_id — the topic-creation lock (not just the Thread-reuse lock)
+          closes the race a design-then-implementation review pair missed.
+    """
+    import threading
+    import time
+
+    from django.db import connection
+
+    session_id = "e2b2c396-507b-4e1a-bc81-c23294821676"
+    create_calls = []
+    create_lock = threading.Lock()
+
+    async def slow_create_topic(chat_id, name, color):
+        with create_lock:
+            create_calls.append(1)
+        time.sleep(0.2)
+        return 4242
+
+    async def fake_send(chat_id, text, message_thread_id=None, **kw):
+        return None
+
+    results = {}
+    barrier = threading.Barrier(2)
+
+    def _run(key):
+        barrier.wait()
+        try:
+            results[key] = start_session(
+                f"conn-race-{key}",
+                "claude_code",
+                "/Users/me/dev/proj",
+                "My session",
+                claude_session_id=session_id,
+            )
+        finally:
+            connection.close()
+
+    with (
+        patch("apps.telegram.telegram_api.create_forum_topic", slow_create_topic),
+        patch("apps.telegram.telegram_api.send_message", fake_send),
+    ):
+        t1 = threading.Thread(target=_run, args=("a",))
+        t2 = threading.Thread(target=_run, args=("b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+    assert len(create_calls) == 1
+    assert results["a"]["thread_id"] == results["b"]["thread_id"]
+    assert Thread.objects.filter(metadata__claude_session_id=session_id).count() == 1

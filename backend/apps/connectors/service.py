@@ -344,6 +344,10 @@ def start_session(
     )
 
     session_name = _compose_session_name(tool, workspace_root, name)
+    # Computed once, up front, so the topic-creation lock below (which fires
+    # after the host branch) can key on the same value regardless of which
+    # branch created/reused the Thread.
+    bound_id = claude_session_id or str(uuid.uuid4())
 
     # The dispatched chat must be DRIVEABLE (write + stream), never read-only:
     # bind it to the host daemon as a headless `claude` session so a typed reply
@@ -368,7 +372,6 @@ def start_session(
         # Bind to the caller's own session when its id is known, so the first
         # Telegram reply resumes THIS conversation (claude_session_started=True
         # makes run_headless try --resume first); otherwise mint a fresh session.
-        bound_id = claude_session_id or str(uuid.uuid4())
         is_driveable_origin = entrypoint != "claude-vscode"
         # pg_advisory_xact_lock, not a row lock: the lookup below can legitimately
         # find nothing (row doesn't exist yet), so two concurrent calls for the
@@ -449,10 +452,35 @@ def start_session(
         instance.workspace_root = workspace_root or instance.workspace_root
         instance.save(update_fields=["thread", "workspace_root", "last_seen_at"])
 
-    if not (thread.metadata.get("telegram_topic_id") and thread.metadata.get("telegram_forum_chat_id")):
-        _ensure_session_topic(thread, session_name)
+    _ensure_session_topic_once(thread, session_name, claude_session_id, bound_id)
 
     return {"thread_id": str(thread.id), "name": session_name}
+
+
+def _ensure_session_topic_once(thread, session_name: str, claude_session_id: str, bound_id: str) -> None:
+    """Check-then-create a session's Telegram topic under the same advisory lock
+    used to dedup its Thread, closing the gap where the Thread-reuse lock alone
+    still let two concurrent dispatches for one session both see no topic and
+    both create one.
+
+    Without `claude_session_id` there is nothing to serialize on (`bound_id` is a
+    fresh random UUID no other call could share), so this just does the plain
+    check-then-create. With it, re-acquire the SAME lock key as the Thread
+    reuse/create step and re-read `thread`'s metadata from the DB first — a
+    concurrent sibling call may have created the topic while this one waited on
+    the lock, and the in-memory `thread` object here can be stale.
+    """
+    if not claude_session_id:
+        if not (thread.metadata.get("telegram_topic_id") and thread.metadata.get("telegram_forum_chat_id")):
+            _ensure_session_topic(thread, session_name)
+        return
+
+    with transaction.atomic():
+        with connection.cursor() as cur:
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", [_session_lock_key(bound_id)])
+        thread.refresh_from_db()
+        if not (thread.metadata.get("telegram_topic_id") and thread.metadata.get("telegram_forum_chat_id")):
+            _ensure_session_topic(thread, session_name)
 
 
 def notify(

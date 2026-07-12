@@ -94,11 +94,16 @@ def _save_topic_id(thread, topic_id, color, forum_chat_id) -> None:
 
 
 @database_sync_to_async
-def _find_conflicting_topic_owner(thread):
+def _find_conflicting_topic_owner(thread, forum_chat_id):
     """Return another active Thread that already owns a live topic for the same
-    claude_session_id as `thread`, if any. Used to avoid minting a duplicate
-    Telegram topic when this thread's own topic_id metadata went missing but a
-    sibling Thread (e.g. from a prior /openremote-control dispatch) still has one.
+    claude_session_id AND forum_chat_id as `thread`, if any. Used to avoid minting
+    a duplicate Telegram topic when this thread's own topic_id metadata went
+    missing but a sibling Thread (e.g. from a prior /openremote-control dispatch)
+    still has one.
+
+    Scoped to active, non-terminal threads and the SAME forum: a stopped/failed
+    sibling's stale topic_id, or a topic that belongs to a different Telegram
+    forum entirely, must not suppress this thread's own topic creation.
     """
     from apps.threads.models import Thread
 
@@ -109,6 +114,13 @@ def _find_conflicting_topic_owner(thread):
         Thread.objects.exclude(id=thread.id)
         .filter(
             metadata__claude_session_id=session_id,
+            metadata__telegram_forum_chat_id=forum_chat_id,
+            status__in=[
+                Thread.StatusChoices.PENDING,
+                Thread.StatusChoices.STARTING,
+                Thread.StatusChoices.RUNNING,
+                Thread.StatusChoices.WAITING_APPROVAL,
+            ],
         )
         .exclude(metadata__telegram_topic_id__isnull=True)
         .first()
@@ -174,7 +186,7 @@ async def _deliver_turn_once(thread, parsed, msg, *, forum_chat_id, api=None) ->
             thread.metadata.get("claude_session_id") or thread.metadata.get("headless")
         )
         if is_driveable:
-            conflict = await _find_conflicting_topic_owner(thread)
+            conflict = await _find_conflicting_topic_owner(thread, forum_chat_id)
             if conflict is not None:
                 log.warning(
                     "observe.delivery: thread %s has no telegram_topic_id but thread %s "
