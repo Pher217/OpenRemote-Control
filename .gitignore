@@ -111,3 +111,6 @@ deploy/orc-stack/orc-stack.env
 # Backups
 *.bak
 backups/
+
+# graphify build output — canonical home is ~/dev/Graphify/{Project}/{repo}/
+graphify-out/
