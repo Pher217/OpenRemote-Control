@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from django.db import models
 from django.utils import timezone
 
 from apps.setup.models import SetupState, SetupToken, hash_token
@@ -15,11 +16,20 @@ class TestSetupTokenIssue:
     def test_issue_returns_raw_token_not_stored_anywhere(self):
         """
         GIVEN a fresh SetupToken.issue() call
-        WHEN the raw token is compared against every stored token_hash
-        THEN the raw value itself never appears in the database
+        WHEN every char/text field value on the persisted row is inspected
+        THEN the raw token value appears in none of them
         """
         obj, raw = SetupToken.issue()
-        assert raw != obj.token_hash
+        obj.refresh_from_db()
+        text_fields = [
+            field
+            for field in obj._meta.get_fields()
+            if isinstance(field, (models.CharField, models.TextField))
+        ]
+        assert text_fields, "expected at least one text-like field to check"
+        for field in text_fields:
+            value = getattr(obj, field.attname)
+            assert raw not in str(value)
 
     def test_issue_stores_only_the_hash(self):
         """

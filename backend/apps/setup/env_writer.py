@@ -96,6 +96,11 @@ def validate_value(value: str) -> None:
         raise EnvWriteError("env values may not contain line separators")
     if "'" in value:
         raise EnvWriteError("env values may not contain single quotes")
+    # python-dotenv honours \' and \\ escapes inside single quotes while Compose
+    # does not, so a backslash makes the two consumers disagree about the value.
+    # None of the allowlisted keys needs one.
+    if "\\" in value:
+        raise EnvWriteError("env values may not contain backslashes")
 
 
 @contextmanager
@@ -159,18 +164,37 @@ def update_env(path: Path, updates: dict[str, str]) -> None:
     if not updates:
         return
 
+    # Inside the container BASE_DIR is /app, so the repo-relative default
+    # resolves to /deploy — a directory that does not exist and that the app
+    # user could not create anyway. Fail with something actionable rather than
+    # a bare PermissionError on mkdir.
+    if not path.parent.is_dir():
+        raise EnvWriteError(
+            f"env directory does not exist: {path.parent}. "
+            "Set ORC_SETUP_ENV_FILE to a path inside a writable mounted directory."
+        )
+
     with _locked(path):
         original = path.read_text(encoding="utf-8") if path.exists() else ""
         lines = original.splitlines()
         remaining = dict(updates)
         out: list[str] = []
 
+        # A key may legitimately appear more than once in a hand-edited file.
+        # Rewriting only the first occurrence would be silently useless: both
+        # Compose and dotenv take the LAST assignment, so a stale duplicate
+        # further down would keep winning and the credential would never change.
+        # Rewrite the first, drop every later one.
+        rewritten: set[str] = set()
         for line in lines:
             stripped = line.strip()
             if stripped and not stripped.startswith("#") and "=" in stripped:
                 key = stripped.partition("=")[0].strip()
                 if key in remaining:
                     out.append(f"{key}={_quote(remaining.pop(key))}")
+                    rewritten.add(key)
+                    continue
+                if key in rewritten:
                     continue
             out.append(line)
 

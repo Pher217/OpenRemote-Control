@@ -59,6 +59,21 @@ def extract_token(request) -> str:
     return ""
 
 
+def normalise_host(raw: str) -> str:
+    """Strip the port, brackets, trailing dot and case from a host value.
+
+    Used for both the request's Host and the configured allowlist entries, so
+    ``[::1]:8000`` and a configured ``::1`` compare equal — they did not when
+    each side was parsed differently.
+    """
+    host = raw.strip()
+    if host.startswith("["):  # bracketed IPv6, optionally with :port
+        host = host[1:].partition("]")[0]
+    elif host.count(":") == 1:  # host:port (a bare IPv6 has several colons)
+        host = host.rsplit(":", 1)[0]
+    return host.rstrip(".").lower()
+
+
 def host_allowed(request) -> bool:
     """True when the request's Host header is an approved loopback name.
 
@@ -69,10 +84,8 @@ def host_allowed(request) -> bool:
     ``X-Forwarded-Host: localhost`` and walk straight through.
     """
     request.get_host()
-    raw_host = request.META.get("HTTP_HOST", "")
-    host = raw_host.rsplit(":", 1)[0] if "]" not in raw_host else raw_host
-    host = host.strip().rstrip(".").lower()
-    allowed = {h.strip().rstrip(".").lower() for h in settings.ORC_SETUP_ALLOWED_HOSTS}
+    host = normalise_host(request.META.get("HTTP_HOST", ""))
+    allowed = {normalise_host(h) for h in settings.ORC_SETUP_ALLOWED_HOSTS}
     return bool(host) and host in allowed
 
 

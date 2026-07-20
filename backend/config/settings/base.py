@@ -183,9 +183,30 @@ ORC_SETUP_ALLOWED_HOSTS = [
 ]
 # Pointing the wizard at a routable name puts a credential-collecting surface on
 # the network, so it takes a second, explicit opt-in.
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
-if not os.environ.get("ORC_SETUP_ALLOW_NONLOOPBACK"):
-    _non_loopback = [h for h in ORC_SETUP_ALLOWED_HOSTS if h.lower() not in _LOOPBACK_HOSTS]
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _normalise_setup_host(raw: str) -> str:
+    """Mirror of apps.setup.auth.normalise_host, needed before apps are loaded."""
+    host = raw.strip()
+    if host.startswith("["):
+        host = host[1:].partition("]")[0]
+    elif host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host.rstrip(".").lower()
+
+
+# "0" and "false" are truthy strings, so an operator writing
+# ORC_SETUP_ALLOW_NONLOOPBACK=0 to *disable* the override would have enabled it.
+if os.environ.get("ORC_SETUP_ALLOW_NONLOOPBACK", "").strip().lower() not in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    _non_loopback = [
+        h for h in ORC_SETUP_ALLOWED_HOSTS if _normalise_setup_host(h) not in _LOOPBACK_HOSTS
+    ]
     if _non_loopback:
         raise ImproperlyConfigured(
             f"ORC_SETUP_ALLOWED_HOSTS contains non-loopback entries {_non_loopback}. "

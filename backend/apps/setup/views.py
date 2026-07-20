@@ -7,12 +7,13 @@ state machine's HTTP surface.
 
 from __future__ import annotations
 
+from django.db import transaction
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.setup.auth import SetupTokenPermission
-from apps.setup.models import SetupState
+from apps.setup.auth import SetupClosed, SetupTokenPermission
+from apps.setup.models import SetupState, SetupToken
 from apps.setup.serializers import AdvanceSerializer, SetupStateSerializer
 
 
@@ -45,13 +46,26 @@ class AdvanceView(SetupAPIView):
 
 
 class CompleteView(SetupAPIView):
-    """POST to finish setup: closes the stage machine and burns the token."""
+    """POST to finish setup: closes the stage machine and burns the token.
+
+    Both writes happen in one transaction, and the token row is locked first.
+    Splitting them would leave a recoverable-only-by-shell state: if closing
+    setup committed and burning the token did not, every retry would 410 while
+    the token stayed live. The lock also stops two concurrent completions from
+    both spending the same single-use token.
+    """
 
     def post(self, request):
-        state = SetupState.load()
         try:
-            state.advance_to(SetupState.STAGE_DONE)
+            with transaction.atomic():
+                token = SetupToken.objects.select_for_update().get(pk=request.setup_token.pk)
+                if not token.is_live():
+                    raise SetupClosed()
+                state = SetupState.objects.select_for_update().get(pk=SetupState.load().pk)
+                if state.is_complete:
+                    raise SetupClosed()
+                state.advance_to(SetupState.STAGE_DONE)
+                token.consume()
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        request.setup_token.consume()
         return Response(SetupStateSerializer(state).data)

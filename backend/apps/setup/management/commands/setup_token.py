@@ -50,9 +50,10 @@ class Command(BaseCommand):
             self.stdout.write(url)
             return
 
-        self.stdout.write(self.style.SUCCESS("Setup wizard ready — open this URL:"))
+        self.stdout.write(self.style.SUCCESS("Setup token issued."))
         self.stdout.write(f"\n  {url}\n")
         self.stdout.write(
-            "This link is single-use and expires in 24 hours. "
-            "Do not expose this port publicly."
+            "Single-use, expires in 24 hours. Do not expose this port publicly.\n"
+            "Note: the /setup page itself is not built yet — until it ships, the "
+            "token is for the /api/setup/* endpoints."
         )

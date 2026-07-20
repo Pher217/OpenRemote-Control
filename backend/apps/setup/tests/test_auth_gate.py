@@ -14,6 +14,7 @@ from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from apps.setup.auth import normalise_host
 from apps.setup.models import SetupState, SetupToken
 
 STATE_URL = "/api/setup/state"
@@ -29,6 +30,10 @@ def client():
 def _live_token() -> str:
     _obj, raw = SetupToken.issue()
     return raw
+
+
+def _live_token_pair() -> tuple[SetupToken, str]:
+    return SetupToken.issue()
 
 
 def _connect_provider():
@@ -129,6 +134,60 @@ class TestHostAllowlist:
 
 
 # ---------------------------------------------------------------------------
+# normalise_host — used for both the request Host and the allowlist entries
+# ---------------------------------------------------------------------------
+
+
+class TestNormaliseHost:
+    def test_bracketed_ipv6_with_port_strips_to_bare_address(self):
+        """
+        GIVEN a bracketed IPv6 host with a port, "[::1]:8000"
+        WHEN normalise_host is called
+        THEN "::1" is returned
+        """
+        assert normalise_host("[::1]:8000") == "::1"
+
+    def test_hostname_with_port_strips_to_bare_hostname(self):
+        """
+        GIVEN "localhost:8000"
+        WHEN normalise_host is called
+        THEN "localhost" is returned
+        """
+        assert normalise_host("localhost:8000") == "localhost"
+
+    def test_uppercase_with_trailing_dot_is_lowercased_and_stripped(self):
+        """
+        GIVEN "LOCALHOST." (uppercase, trailing dot, no port)
+        WHEN normalise_host is called
+        THEN "localhost" is returned
+        """
+        assert normalise_host("LOCALHOST.") == "localhost"
+
+    def test_bare_ipv4_is_unchanged(self):
+        """
+        GIVEN "127.0.0.1" with no port
+        WHEN normalise_host is called
+        THEN "127.0.0.1" is returned unchanged
+        """
+        assert normalise_host("127.0.0.1") == "127.0.0.1"
+
+
+@pytest.mark.django_db
+class TestNormaliseHostIntegration:
+    @override_settings(ORC_SETUP_ALLOWED_HOSTS=["::1"], ALLOWED_HOSTS=["*"])
+    def test_bracketed_ipv6_host_header_matches_bare_allowlist_entry(self, client):
+        """
+        GIVEN ORC_SETUP_ALLOWED_HOSTS contains the bare address "::1"
+        WHEN GET /api/setup/state arrives with Host: [::1]:8000 and a valid
+             token
+        THEN 200 is returned (both sides are normalised before comparison)
+        """
+        raw = _live_token()
+        resp = client.get(STATE_URL, {"token": raw}, HTTP_HOST="[::1]:8000")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Setup-closed (410), regardless of credentials
 # ---------------------------------------------------------------------------
 
@@ -193,15 +252,16 @@ class TestQueryParamCsrfDefense:
     def test_post_advance_with_token_only_in_query_param_returns_403(self, client):
         """
         GIVEN a live token
-        WHEN POST /api/setup/advance is requested with the token only in
-             ?token= (not the header)
+        WHEN POST /api/setup/advance is requested with the token only in the
+             actual query string (?token=<raw>), no header, and a body that
+             carries only the stage
         THEN 403 is returned
         """
         _connect_provider()
         raw = _live_token()
         resp = client.post(
-            ADVANCE_URL,
-            {"stage": SetupState.STAGE_RUNTIMES, "token": raw},
+            f"{ADVANCE_URL}?token={raw}",
+            {"stage": SetupState.STAGE_RUNTIMES},
             format="json",
             HTTP_HOST="localhost",
         )
@@ -370,6 +430,46 @@ class TestAdvanceRejectsDone:
 
 
 @pytest.mark.django_db
+class TestAdvanceDoesNotConsumeToken:
+    def test_advance_to_runtimes_with_header_token_returns_200(self, client):
+        """
+        GIVEN a connected provider and a live token
+        WHEN POST /api/setup/advance is requested with stage="runtimes" and
+             the token in the header
+        THEN 200 is returned
+        """
+        _connect_provider()
+        raw = _live_token()
+        resp = client.post(
+            ADVANCE_URL,
+            {"stage": SetupState.STAGE_RUNTIMES},
+            format="json",
+            HTTP_HOST="localhost",
+            HTTP_X_ORC_SETUP_TOKEN=raw,
+        )
+        assert resp.status_code == 200
+
+    def test_advance_to_runtimes_does_not_consume_the_token(self, client):
+        """
+        GIVEN a connected provider and a live token
+        WHEN POST /api/setup/advance succeeds for stage="runtimes"
+        THEN the token row's consumed_at is still None afterward — only
+             /complete burns the token
+        """
+        _connect_provider()
+        obj, raw = _live_token_pair()
+        client.post(
+            ADVANCE_URL,
+            {"stage": SetupState.STAGE_RUNTIMES},
+            format="json",
+            HTTP_HOST="localhost",
+            HTTP_X_ORC_SETUP_TOKEN=raw,
+        )
+        obj.refresh_from_db()
+        assert obj.consumed_at is None
+
+
+@pytest.mark.django_db
 class TestCompleteBurnsToken:
     def test_complete_with_valid_token_returns_200(self, client):
         """
@@ -413,3 +513,31 @@ class TestCompleteBurnsToken:
             COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
         )
         assert second.status_code == 410
+
+    def test_complete_marks_the_token_row_consumed_in_the_database(self, client):
+        """
+        GIVEN a live token used to call /api/setup/complete successfully
+        WHEN the SetupToken row is reloaded from the database afterward
+        THEN its consumed_at column is no longer None
+        """
+        _connect_provider()
+        obj, raw = SetupToken.issue()
+        client.post(
+            COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
+        )
+        obj.refresh_from_db()
+        assert obj.consumed_at is not None
+
+    def test_complete_makes_the_used_token_fail_verify(self, client):
+        """
+        GIVEN a live token used to call /api/setup/complete successfully
+        WHEN SetupToken.verify() is called again with the same raw value
+        THEN it returns None (the token itself was burned, not merely
+             shadowed by the setup-closed check)
+        """
+        _connect_provider()
+        _obj, raw = SetupToken.issue()
+        client.post(
+            COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
+        )
+        assert SetupToken.verify(raw) is None

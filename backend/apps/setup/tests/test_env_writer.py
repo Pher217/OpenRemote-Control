@@ -397,6 +397,93 @@ class TestValidateValue:
         """
         validate_value("a-perfectly-normal-value")
 
+    def test_validate_value_rejects_backslash(self):
+        """
+        GIVEN a value containing a backslash
+        WHEN validate_value is called
+        THEN EnvWriteError is raised
+        """
+        with pytest.raises(EnvWriteError):
+            validate_value("evil\\value")
+
+
+# ---------------------------------------------------------------------------
+# update_env — duplicate keys in a hand-edited file
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateEnvDuplicateKeys:
+    def test_duplicate_key_leaves_exactly_one_assignment_line(self, tmp_path):
+        """
+        GIVEN an env file where TELEGRAM_BOT_TOKEN is assigned twice
+        WHEN update_env sets TELEGRAM_BOT_TOKEN to a new value
+        THEN exactly one line in the file starts with "TELEGRAM_BOT_TOKEN"
+        """
+        path = tmp_path / ".env"
+        path.write_text(
+            "TELEGRAM_BOT_TOKEN=first\nTELEGRAM_BOT_TOKEN=stale-last\n", encoding="utf-8"
+        )
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "fresh"})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert sum(1 for line in lines if line.startswith("TELEGRAM_BOT_TOKEN")) == 1
+
+    def test_duplicate_key_stale_last_value_is_gone(self, tmp_path):
+        """
+        GIVEN an env file where TELEGRAM_BOT_TOKEN is assigned twice, ending
+             with a stale last value
+        WHEN update_env sets TELEGRAM_BOT_TOKEN to a new value
+        THEN the stale last value no longer appears anywhere in the file
+        """
+        path = tmp_path / ".env"
+        path.write_text(
+            "TELEGRAM_BOT_TOKEN=first\nTELEGRAM_BOT_TOKEN=stale-last\n", encoding="utf-8"
+        )
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "fresh"})
+        content = path.read_text(encoding="utf-8")
+        assert "stale-last" not in content
+
+    def test_duplicate_key_surviving_assignment_has_the_new_value(self, tmp_path):
+        """
+        GIVEN an env file where TELEGRAM_BOT_TOKEN is assigned twice
+        WHEN update_env sets TELEGRAM_BOT_TOKEN to a new value
+        THEN read_env reports the new value (Compose/dotenv both take the
+             last assignment, so a surviving duplicate would otherwise win)
+        """
+        path = tmp_path / ".env"
+        path.write_text(
+            "TELEGRAM_BOT_TOKEN=first\nTELEGRAM_BOT_TOKEN=stale-last\n", encoding="utf-8"
+        )
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "fresh"})
+        assert read_env(path)["TELEGRAM_BOT_TOKEN"] == "fresh"
+
+
+# ---------------------------------------------------------------------------
+# update_env — missing target directory
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateEnvMissingDirectory:
+    def test_missing_parent_directory_raises_env_write_error(self, tmp_path):
+        """
+        GIVEN a target path whose parent directory does not exist
+        WHEN update_env is called
+        THEN EnvWriteError is raised (not PermissionError or FileNotFoundError)
+        """
+        path = tmp_path / "does-not-exist" / ".env"
+        with pytest.raises(EnvWriteError):
+            update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
+
+    def test_missing_parent_directory_error_mentions_the_setting(self, tmp_path):
+        """
+        GIVEN a target path whose parent directory does not exist
+        WHEN update_env is called and EnvWriteError is raised
+        THEN the message mentions ORC_SETUP_ENV_FILE so the operator knows
+             which setting to fix
+        """
+        path = tmp_path / "does-not-exist" / ".env"
+        with pytest.raises(EnvWriteError, match="ORC_SETUP_ENV_FILE"):
+            update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
+
 
 # ---------------------------------------------------------------------------
 # read_env
