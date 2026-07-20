@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import structlog
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 from apps.observe.validators import validate_observe_delivery_mode
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     "apps.gateway",
     "apps.hostlink",
     "apps.supervisor",
+    "apps.setup",
 ]
 
 MIDDLEWARE = [
@@ -169,6 +171,54 @@ ORC_PROMPT_CHAT_ID = os.environ.get("ORC_PROMPT_CHAT_ID") or os.environ.get(
 # Multi-host (apps.hostlink): pre-shared one-time enrollment secret a host daemon
 # presents once to receive a per-host token.
 ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
+
+# First-run setup wizard (apps.setup). The wizard is token-gated and reachable
+# only on loopback: ORC_SETUP_ALLOWED_HOSTS pins the Host header, which defeats
+# DNS rebinding from a malicious page (a REMOTE_ADDR check would instead break
+# under Docker, where the peer address is the bridge gateway, not 127.0.0.1).
+ORC_SETUP_ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get("ORC_SETUP_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if h.strip()
+]
+# Pointing the wizard at a routable name puts a credential-collecting surface on
+# the network, so it takes a second, explicit opt-in.
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _normalise_setup_host(raw: str) -> str:
+    """Mirror of apps.setup.auth.normalise_host, needed before apps are loaded."""
+    host = raw.strip()
+    if host.startswith("["):
+        host = host[1:].partition("]")[0]
+    elif host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host.rstrip(".").lower()
+
+
+# "0" and "false" are truthy strings, so an operator writing
+# ORC_SETUP_ALLOW_NONLOOPBACK=0 to *disable* the override would have enabled it.
+if os.environ.get("ORC_SETUP_ALLOW_NONLOOPBACK", "").strip().lower() not in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    _non_loopback = [
+        h for h in ORC_SETUP_ALLOWED_HOSTS if _normalise_setup_host(h) not in _LOOPBACK_HOSTS
+    ]
+    if _non_loopback:
+        raise ImproperlyConfigured(
+            f"ORC_SETUP_ALLOWED_HOSTS contains non-loopback entries {_non_loopback}. "
+            "The setup wizard collects credentials and is meant for localhost only. "
+            "Set ORC_SETUP_ALLOW_NONLOOPBACK=1 if you really intend this."
+        )
+# Base URL printed by `manage.py setup_token` — where the operator's browser opens.
+ORC_SETUP_BASE_URL = os.environ.get("ORC_SETUP_BASE_URL", "http://127.0.0.1:8000")
+# Lifetime of a setup token / setup session cookie, in minutes.
+ORC_SETUP_TOKEN_TTL_MINUTES = int(os.environ.get("ORC_SETUP_TOKEN_TTL_MINUTES", "30"))
+# The .env file the wizard writes collected credentials into.
+ORC_SETUP_ENV_FILE = os.environ.get("ORC_SETUP_ENV_FILE", str(BASE_DIR.parent / "deploy" / ".env"))
 
 # Public backend URL embedded in QR pairing payloads (`/pair`, `manage.py orc_pair`).
 # Empty => the pairing payload degrades to just the code (manual --backend still works).

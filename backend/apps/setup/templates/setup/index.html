@@ -1,0 +1,23 @@
+{% extends "setup/base.html" %}
+{% block body %}
+  <h1>OpenRemote Control — Setup</h1>
+  <p class="muted">Stage: <code>{{ state.stage }}</code></p>
+
+  <h2>Chat providers</h2>
+  {% if state.connected_providers %}
+    <ul>{% for p in state.connected_providers %}<li>{{ p }} — connected</li>{% endfor %}</ul>
+  {% else %}
+    <p>None connected yet. At least one is required before continuing.</p>
+  {% endif %}
+
+  <h2>Agent runtimes</h2>
+  {% if state.runtimes %}
+    <ul>{% for k, v in state.runtimes.items %}<li>{{ k }} — {{ v }}</li>{% endfor %}</ul>
+  {% else %}
+    <p>None detected yet.</p>
+  {% endif %}
+
+  <p class="muted">The guided provider and runtime flows land in the next phase.
+  This page currently reports state only; the <code>/api/setup/*</code> endpoints
+  are live and authenticated by your setup session.</p>
+{% endblock %}

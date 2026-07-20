@@ -1,0 +1,8 @@
+{% extends "setup/base.html" %}
+{% block body %}
+  <h1>Setup link not valid</h1>
+  <p>This setup link is missing, expired, already used, or was opened from
+  somewhere other than this machine.</p>
+  <p class="muted">Issue a fresh one on the host running OpenRemote Control:
+  <code>manage.py setup_token</code></p>
+{% endblock %}

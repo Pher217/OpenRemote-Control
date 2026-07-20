@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.urls import include, path
 
+from apps.setup.page import SetupPageView
 from config.health import health
 
 urlpatterns = [
@@ -17,4 +18,6 @@ urlpatterns = [
     path("api/connectors/", include("apps.connectors.urls", namespace="connectors")),
     path("api/gateway/", include("apps.gateway.urls", namespace="gateway")),
     path("api/hostlink/", include("apps.hostlink.urls", namespace="hostlink")),
+    path("api/setup/", include("apps.setup.urls", namespace="orc_setup")),
+    path("setup", SetupPageView.as_view(), name="setup-page"),
 ]
