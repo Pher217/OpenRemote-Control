@@ -36,45 +36,52 @@ class TestUpdateEnvHappyPath:
         THEN the comment and blank line survive unchanged
         """
         path = tmp_path / ".env"
-        path.write_text("# a comment\n\nFOO=old\nBAR=keep\n", encoding="utf-8")
-        update_env(path, {"FOO": "new"})
+        path.write_text(
+            "# a comment\n\nTELEGRAM_BOT_TOKEN=old\nTELEGRAM_FORUM_CHAT_ID=keep\n",
+            encoding="utf-8",
+        )
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "new"})
         content = path.read_text(encoding="utf-8")
         assert "# a comment" in content.splitlines()
         assert "" in content.splitlines()
 
     def test_updating_existing_key_preserves_ordering(self, tmp_path):
         """
-        GIVEN an env file with keys BAR then FOO
-        WHEN update_env changes FOO's value
-        THEN BAR still appears before FOO in the rewritten file
+        GIVEN an env file with keys TELEGRAM_FORUM_CHAT_ID then TELEGRAM_BOT_TOKEN
+        WHEN update_env changes TELEGRAM_BOT_TOKEN's value
+        THEN TELEGRAM_FORUM_CHAT_ID still appears before TELEGRAM_BOT_TOKEN
         """
         path = tmp_path / ".env"
-        path.write_text("BAR=1\nFOO=old\n", encoding="utf-8")
-        update_env(path, {"FOO": "new"})
+        path.write_text(
+            "TELEGRAM_FORUM_CHAT_ID=1\nTELEGRAM_BOT_TOKEN=old\n", encoding="utf-8"
+        )
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "new"})
         lines = path.read_text(encoding="utf-8").splitlines()
-        assert lines.index("BAR=1") < lines.index("FOO=new")
+        assert lines.index("TELEGRAM_FORUM_CHAT_ID=1") < lines.index(
+            "TELEGRAM_BOT_TOKEN='new'"
+        )
 
     def test_updating_existing_key_changes_its_value(self, tmp_path):
         """
-        GIVEN an env file with FOO=old
-        WHEN update_env sets FOO to "new"
-        THEN read_env reports FOO as "new"
+        GIVEN an env file with TELEGRAM_BOT_TOKEN=old
+        WHEN update_env sets TELEGRAM_BOT_TOKEN to "new"
+        THEN read_env reports TELEGRAM_BOT_TOKEN as "new"
         """
         path = tmp_path / ".env"
-        path.write_text("FOO=old\n", encoding="utf-8")
-        update_env(path, {"FOO": "new"})
-        assert read_env(path)["FOO"] == "new"
+        path.write_text("TELEGRAM_BOT_TOKEN=old\n", encoding="utf-8")
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "new"})
+        assert read_env(path)["TELEGRAM_BOT_TOKEN"] == "new"
 
     def test_new_key_is_appended(self, tmp_path):
         """
-        GIVEN an env file that does not contain BAZ
-        WHEN update_env sets BAZ
-        THEN BAZ is present afterward with the given value
+        GIVEN an env file that does not contain ANTHROPIC_API_KEY
+        WHEN update_env sets ANTHROPIC_API_KEY
+        THEN ANTHROPIC_API_KEY is present afterward with the given value
         """
         path = tmp_path / ".env"
-        path.write_text("FOO=old\n", encoding="utf-8")
-        update_env(path, {"BAZ": "new-value"})
-        assert read_env(path)["BAZ"] == "new-value"
+        path.write_text("TELEGRAM_BOT_TOKEN=old\n", encoding="utf-8")
+        update_env(path, {"ANTHROPIC_API_KEY": "new-value"})
+        assert read_env(path)["ANTHROPIC_API_KEY"] == "new-value"
 
     def test_file_is_created_when_absent(self, tmp_path):
         """
@@ -83,7 +90,7 @@ class TestUpdateEnvHappyPath:
         THEN the file exists afterward
         """
         path = tmp_path / ".env"
-        update_env(path, {"FOO": "bar"})
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
         assert path.exists()
 
     def test_file_created_when_absent_has_correct_value(self, tmp_path):
@@ -93,8 +100,8 @@ class TestUpdateEnvHappyPath:
         THEN the new file contains the written key/value
         """
         path = tmp_path / ".env"
-        update_env(path, {"FOO": "bar"})
-        assert read_env(path)["FOO"] == "bar"
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
+        assert read_env(path)["TELEGRAM_BOT_TOKEN"] == "bar"
 
     def test_written_file_has_owner_only_permissions(self, tmp_path):
         """
@@ -103,7 +110,7 @@ class TestUpdateEnvHappyPath:
         THEN it is exactly 0o600 (owner read/write only)
         """
         path = tmp_path / ".env"
-        update_env(path, {"FOO": "bar"})
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
         assert _mode(path) == 0o600
 
     def test_value_containing_equals_round_trips(self, tmp_path):
@@ -113,8 +120,8 @@ class TestUpdateEnvHappyPath:
         THEN the full value is recovered unchanged
         """
         path = tmp_path / ".env"
-        update_env(path, {"DATABASE_URL": "postgres://user:pass@host/db?sslmode=require"})
-        assert read_env(path)["DATABASE_URL"] == "postgres://user:pass@host/db?sslmode=require"
+        update_env(path, {"OLLAMA_BASE_URL": "http://host/db?sslmode=require"})
+        assert read_env(path)["OLLAMA_BASE_URL"] == "http://host/db?sslmode=require"
 
     def test_no_tmp_file_left_after_successful_write(self, tmp_path):
         """
@@ -123,8 +130,29 @@ class TestUpdateEnvHappyPath:
         THEN none are found
         """
         path = tmp_path / ".env"
-        update_env(path, {"FOO": "bar"})
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
         assert _tmp_leftovers(tmp_path) == []
+
+    def test_written_value_is_single_quoted_in_raw_file(self, tmp_path):
+        """
+        GIVEN a fresh update_env call
+        WHEN the raw file content is inspected
+        THEN the value appears single-quoted (Compose $VAR interpolation defense)
+        """
+        path = tmp_path / ".env"
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "bar"})
+        content = path.read_text(encoding="utf-8")
+        assert "TELEGRAM_BOT_TOKEN='bar'" in content
+
+    def test_value_containing_dollar_var_round_trips_through_read_env(self, tmp_path):
+        """
+        GIVEN a value containing a literal "$VAR" style reference
+        WHEN it is written (single-quoted) and then re-read
+        THEN the value is recovered unchanged, not interpolated
+        """
+        path = tmp_path / ".env"
+        update_env(path, {"OLLAMA_BASE_URL": "http://$HOST/path"})
+        assert read_env(path)["OLLAMA_BASE_URL"] == "http://$HOST/path"
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +168,7 @@ class TestUpdateEnvNoOp:
         THEN the file content is byte-identical afterward
         """
         path = tmp_path / ".env"
-        original = "FOO=bar\n"
+        original = "TELEGRAM_BOT_TOKEN=bar\n"
         path.write_text(original, encoding="utf-8")
         update_env(path, {})
         assert path.read_bytes() == original.encode("utf-8")
@@ -169,9 +197,9 @@ class TestUpdateEnvNewlineInjection:
         THEN EnvWriteError is raised
         """
         path = tmp_path / ".env"
-        path.write_text("FOO=bar\n", encoding="utf-8")
+        path.write_text("TELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8")
         with pytest.raises(EnvWriteError):
-            update_env(path, {"FOO": "evil\nDEBUG=true"})
+            update_env(path, {"TELEGRAM_BOT_TOKEN": "evil\nDEBUG=true"})
 
     def test_value_with_newline_does_not_modify_the_file(self, tmp_path):
         """
@@ -180,10 +208,10 @@ class TestUpdateEnvNewlineInjection:
         THEN the file is byte-identical to before the call
         """
         path = tmp_path / ".env"
-        original = "FOO=bar\n"
+        original = "TELEGRAM_BOT_TOKEN=bar\n"
         path.write_text(original, encoding="utf-8")
         with pytest.raises(EnvWriteError):
-            update_env(path, {"FOO": "evil\nDEBUG=true"})
+            update_env(path, {"TELEGRAM_BOT_TOKEN": "evil\nDEBUG=true"})
         assert path.read_bytes() == original.encode("utf-8")
 
     def test_value_with_carriage_return_raises(self, tmp_path):
@@ -193,9 +221,9 @@ class TestUpdateEnvNewlineInjection:
         THEN EnvWriteError is raised
         """
         path = tmp_path / ".env"
-        path.write_text("FOO=bar\n", encoding="utf-8")
+        path.write_text("TELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8")
         with pytest.raises(EnvWriteError):
-            update_env(path, {"FOO": "evil\rDEBUG=true"})
+            update_env(path, {"TELEGRAM_BOT_TOKEN": "evil\rDEBUG=true"})
 
     def test_no_tmp_file_left_after_rejected_newline_write(self, tmp_path):
         """
@@ -204,10 +232,85 @@ class TestUpdateEnvNewlineInjection:
         THEN none are found
         """
         path = tmp_path / ".env"
-        path.write_text("FOO=bar\n", encoding="utf-8")
+        path.write_text("TELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8")
         with pytest.raises(EnvWriteError):
-            update_env(path, {"FOO": "evil\nDEBUG=true"})
+            update_env(path, {"TELEGRAM_BOT_TOKEN": "evil\nDEBUG=true"})
         assert _tmp_leftovers(tmp_path) == []
+
+    @pytest.mark.parametrize(
+        "separator",
+        [
+            "\x0b",  # line tabulation
+            "\x0c",  # form feed
+            "\x1c",  # file separator
+            "\x1d",  # group separator
+            "\x1e",  # record separator
+            "\x85",  # next line
+            " ",  # line separator
+            " ",  # paragraph separator
+        ],
+    )
+    def test_validate_value_rejects_every_splitlines_separator(self, separator):
+        """
+        GIVEN a value containing a character str.splitlines() treats as a line break
+        WHEN validate_value is called
+        THEN EnvWriteError is raised
+        """
+        with pytest.raises(EnvWriteError):
+            validate_value(f"evil{separator}DEBUG=true")
+
+    def test_validate_value_rejects_nul(self):
+        """
+        GIVEN a value containing a NUL byte
+        WHEN validate_value is called
+        THEN EnvWriteError is raised
+        """
+        with pytest.raises(EnvWriteError):
+            validate_value("evil\x00value")
+
+    def test_validate_value_rejects_single_quote(self):
+        """
+        GIVEN a value containing a single quote
+        WHEN validate_value is called
+        THEN EnvWriteError is raised
+        """
+        with pytest.raises(EnvWriteError):
+            validate_value("evil'value")
+
+    def test_second_order_injection_via_vertical_tab_is_rejected(self, tmp_path):
+        """
+        GIVEN an attacker-controlled value using \\x0b to smuggle a second
+             assignment line (splitlines() would later parse it as a real line,
+             even though a naive \\n/\\r-only check would miss it)
+        WHEN update_env is called with that value
+        THEN EnvWriteError is raised
+        """
+        path = tmp_path / ".env"
+        path.write_text("TELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8")
+        with pytest.raises(EnvWriteError):
+            update_env(
+                path,
+                {"TELEGRAM_BOT_TOKEN": "x\x0bORC_CONNECTOR_TOKEN=pwned"},
+            )
+
+    def test_second_order_injection_leaves_no_smuggled_key_after_later_legit_write(
+        self, tmp_path
+    ):
+        """
+        GIVEN a rejected \\x0b-smuggled update attempt against ORC_CONNECTOR_TOKEN
+        WHEN a subsequent legitimate update_env call is made
+        THEN the file contains no line starting with "ORC_CONNECTOR_TOKEN"
+        """
+        path = tmp_path / ".env"
+        path.write_text("TELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8")
+        with pytest.raises(EnvWriteError):
+            update_env(
+                path,
+                {"TELEGRAM_BOT_TOKEN": "x\x0bORC_CONNECTOR_TOKEN=pwned"},
+            )
+        update_env(path, {"TELEGRAM_BOT_TOKEN": "legit-value"})
+        lines = path.read_text(encoding="utf-8").splitlines()
+        assert not any(line.startswith("ORC_CONNECTOR_TOKEN") for line in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +334,7 @@ class TestInvalidKeys:
 
     def test_validate_key_accepts_a_valid_key(self):
         """
-        GIVEN a key matching ^[A-Z][A-Z0-9_]*$
+        GIVEN a key matching ^[A-Z][A-Z0-9_]*$ that is also allowlisted
         WHEN validate_key is called
         THEN no exception is raised
         """
@@ -240,14 +343,48 @@ class TestInvalidKeys:
     def test_update_env_rejects_invalid_key_and_leaves_file_untouched(self, tmp_path):
         """
         GIVEN an existing env file
-        WHEN update_env is called with an invalid key
+        WHEN update_env is called with a shape-invalid key
         THEN EnvWriteError is raised and the file is unchanged
         """
         path = tmp_path / ".env"
-        original = "FOO=bar\n"
+        original = "TELEGRAM_BOT_TOKEN=bar\n"
         path.write_text(original, encoding="utf-8")
         with pytest.raises(EnvWriteError):
             update_env(path, {"bad-key": "value"})
+        assert path.read_bytes() == original.encode("utf-8")
+
+    @pytest.mark.parametrize(
+        "non_allowlisted_key",
+        ["SECRET_KEY", "POSTGRES_PASSWORD", "ALLOWED_HOSTS", "DEBUG"],
+    )
+    def test_validate_key_rejects_shape_valid_but_non_allowlisted_key(
+        self, non_allowlisted_key
+    ):
+        """
+        GIVEN a key that matches ^[A-Z][A-Z0-9_]*$ but is not in WRITABLE_KEYS
+        WHEN validate_key is called
+        THEN EnvWriteError is raised
+        """
+        with pytest.raises(EnvWriteError):
+            validate_key(non_allowlisted_key)
+
+    @pytest.mark.parametrize(
+        "non_allowlisted_key",
+        ["SECRET_KEY", "POSTGRES_PASSWORD", "ALLOWED_HOSTS", "DEBUG"],
+    )
+    def test_update_env_rejects_non_allowlisted_key_and_leaves_file_untouched(
+        self, tmp_path, non_allowlisted_key
+    ):
+        """
+        GIVEN an existing env file
+        WHEN update_env is called with a shape-valid but non-allowlisted key
+        THEN EnvWriteError is raised and the file is unchanged
+        """
+        path = tmp_path / ".env"
+        original = "TELEGRAM_BOT_TOKEN=bar\n"
+        path.write_text(original, encoding="utf-8")
+        with pytest.raises(EnvWriteError):
+            update_env(path, {non_allowlisted_key: "value"})
         assert path.read_bytes() == original.encode("utf-8")
 
 
@@ -302,8 +439,10 @@ class TestReadEnv:
         THEN that line contributes nothing to the resulting dict
         """
         path = tmp_path / ".env"
-        path.write_text("this line has no separator\nFOO=bar\n", encoding="utf-8")
-        assert read_env(path) == {"FOO": "bar"}
+        path.write_text(
+            "this line has no separator\nTELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8"
+        )
+        assert read_env(path) == {"TELEGRAM_BOT_TOKEN": "bar"}
 
     def test_read_env_parses_a_normal_key_value_line(self, tmp_path):
         """
@@ -312,5 +451,5 @@ class TestReadEnv:
         THEN the dict maps KEY to value
         """
         path = tmp_path / ".env"
-        path.write_text("FOO=bar\n", encoding="utf-8")
-        assert read_env(path) == {"FOO": "bar"}
+        path.write_text("TELEGRAM_BOT_TOKEN=bar\n", encoding="utf-8")
+        assert read_env(path) == {"TELEGRAM_BOT_TOKEN": "bar"}

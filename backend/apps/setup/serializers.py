@@ -22,4 +22,13 @@ class SetupStateSerializer(serializers.ModelSerializer):
 
 
 class AdvanceSerializer(serializers.Serializer):
-    stage = serializers.ChoiceField(choices=[c[0] for c in SetupState.STAGE_CHOICES])
+    """Stages reachable via /advance.
+
+    ``done`` is deliberately excluded: completion must go through
+    ``CompleteView``, which is the only path that also burns the setup token.
+    Allowing it here would close setup while leaving a live token behind.
+    """
+
+    stage = serializers.ChoiceField(
+        choices=[c[0] for c in SetupState.STAGE_CHOICES if c[0] != SetupState.STAGE_DONE]
+    )

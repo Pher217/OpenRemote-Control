@@ -25,7 +25,7 @@ import hashlib
 import secrets
 from datetime import timedelta
 
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 #: How long a freshly minted setup token stays usable.
@@ -62,30 +62,30 @@ class SetupToken(models.Model):
     @classmethod
     def issue(cls, *, ttl: timedelta | None = None) -> tuple[SetupToken, str]:
         """Mint a token, revoking any outstanding ones. Returns (obj, raw)."""
-        cls.objects.filter(consumed_at__isnull=True).update(consumed_at=timezone.now())
-        raw = secrets.token_urlsafe(TOKEN_BYTES)
-        obj = cls.objects.create(
-            token_hash=hash_token(raw),
-            expires_at=timezone.now() + (ttl or TOKEN_TTL),
-        )
+        with transaction.atomic():
+            cls.objects.filter(consumed_at__isnull=True).update(consumed_at=timezone.now())
+            raw = secrets.token_urlsafe(TOKEN_BYTES)
+            obj = cls.objects.create(
+                token_hash=hash_token(raw),
+                expires_at=timezone.now() + (ttl or TOKEN_TTL),
+            )
         return obj, raw
 
     @classmethod
     def verify(cls, raw: str) -> SetupToken | None:
         """Return the live token matching ``raw``, or None.
 
-        Lookup is by hash so the raw value is never stored; the comparison is
-        still done with ``compare_digest`` so a partial-hash-collision probe
-        cannot be timed.
+        The lookup is an exact match on an indexed SHA-256, which is what makes
+        this safe: the raw token carries 256 bits of ``secrets`` entropy, and
+        preimage resistance means an attacker cannot grind toward a matching
+        index entry. (An additional ``compare_digest`` here would be theatre —
+        the database already matched the column exactly, so the comparison
+        could never fail.)
         """
         if not raw:
             return None
         candidate = cls.objects.filter(token_hash=hash_token(raw)).first()
-        if candidate is None:
-            return None
-        if not secrets.compare_digest(candidate.token_hash, hash_token(raw)):
-            return None
-        if not candidate.is_live():
+        if candidate is None or not candidate.is_live():
             return None
         return candidate
 

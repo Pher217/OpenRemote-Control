@@ -11,11 +11,18 @@ Three independent checks, in order of cheapness:
    127.0.0.1. Pinning the ``Host`` header defeats that, and unlike a
    ``REMOTE_ADDR`` check it survives Docker (the browser sends
    ``Host: localhost:8000``; ``REMOTE_ADDR`` would be the bridge gateway).
-3. **One-time token.** The real credential. 256 bits, minted by the installer,
-   never guessable and never readable cross-origin.
+3. **Cross-origin refusal.** Host pinning stops rebinding, but it does nothing
+   against a plain cross-origin request to loopback: there the browser sends
+   the honest ``Host: localhost:8000``, which passes. So state-changing methods
+   additionally require the token in a *header* — which forces a CORS preflight
+   the wizard's origin alone can satisfy — and any request self-identifying as
+   cross-site via ``Origin``/``Sec-Fetch-Site`` is refused.
+4. **One-time token.** The real credential. 256 bits, minted by the installer.
 """
 
 from __future__ import annotations
+
+from urllib.parse import urlparse
 
 from django.conf import settings
 from rest_framework import status
@@ -29,6 +36,12 @@ from apps.setup.models import SetupState, SetupToken
 TOKEN_HEADER = "HTTP_X_ORC_SETUP_TOKEN"
 TOKEN_QUERY_PARAM = "token"
 
+#: Methods that may carry the token in the query string. A state-changing
+#: request must use the header: a cross-origin page can issue a "simple"
+#: POST to loopback with a query string, but it cannot set a custom header
+#: without a preflight it will fail.
+QUERY_PARAM_METHODS = frozenset({"GET", "HEAD"})
+
 
 class SetupClosed(APIException):
     status_code = status.HTTP_410_GONE
@@ -37,18 +50,44 @@ class SetupClosed(APIException):
 
 
 def extract_token(request) -> str:
-    """Pull the raw token from the header, falling back to the query param."""
+    """Pull the raw token from the header, or the query param on safe methods."""
     header = request.META.get(TOKEN_HEADER, "")
     if header:
         return header.strip()
-    return request.query_params.get(TOKEN_QUERY_PARAM, "").strip()
+    if request.method in QUERY_PARAM_METHODS:
+        return request.query_params.get(TOKEN_QUERY_PARAM, "").strip()
+    return ""
 
 
 def host_allowed(request) -> bool:
-    """True when the request's Host header is an approved loopback name."""
-    host = request.get_host().split(":")[0].lower()
-    allowed = {h.lower() for h in settings.ORC_SETUP_ALLOWED_HOSTS}
-    return host in allowed
+    """True when the request's Host header is an approved loopback name.
+
+    ``request.get_host()`` is called first so Django's own ``DisallowedHost``
+    rejection still applies, but the value compared here comes straight from
+    ``HTTP_HOST``. That keeps the gate correct even if a deployment later sets
+    ``USE_X_FORWARDED_HOST``, which would otherwise let a remote caller assert
+    ``X-Forwarded-Host: localhost`` and walk straight through.
+    """
+    request.get_host()
+    raw_host = request.META.get("HTTP_HOST", "")
+    host = raw_host.rsplit(":", 1)[0] if "]" not in raw_host else raw_host
+    host = host.strip().rstrip(".").lower()
+    allowed = {h.strip().rstrip(".").lower() for h in settings.ORC_SETUP_ALLOWED_HOSTS}
+    return bool(host) and host in allowed
+
+
+def is_cross_site(request) -> bool:
+    """True when the request advertises itself as coming from another origin."""
+    fetch_site = request.META.get("HTTP_SEC_FETCH_SITE", "").strip().lower()
+    if fetch_site and fetch_site not in ("same-origin", "none"):
+        return True
+    origin = request.META.get("HTTP_ORIGIN", "").strip()
+    if origin:
+        origin_host = urlparse(origin).hostname or ""
+        allowed = {h.strip().rstrip(".").lower() for h in settings.ORC_SETUP_ALLOWED_HOSTS}
+        if origin_host.lower() not in allowed:
+            return True
+    return False
 
 
 class SetupTokenPermission(BasePermission):
@@ -64,6 +103,13 @@ class SetupTokenPermission(BasePermission):
                 "The setup wizard is only reachable on localhost. "
                 "Do not expose this port publicly."
             )
+        # Legitimate wizard traffic is direct browser-to-loopback and is never
+        # proxied, so a forwarding header means something is in the path that
+        # should not be.
+        if request.META.get("HTTP_X_FORWARDED_HOST") or request.META.get("HTTP_X_FORWARDED_FOR"):
+            raise PermissionDenied("The setup wizard does not accept proxied requests.")
+        if is_cross_site(request):
+            raise PermissionDenied("Cross-origin requests to the setup wizard are refused.")
         token = SetupToken.verify(extract_token(request))
         if token is None:
             return False

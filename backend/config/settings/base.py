@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import structlog
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 from apps.observe.validators import validate_observe_delivery_mode
@@ -180,6 +181,17 @@ ORC_SETUP_ALLOWED_HOSTS = [
     for h in os.environ.get("ORC_SETUP_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
     if h.strip()
 ]
+# Pointing the wizard at a routable name puts a credential-collecting surface on
+# the network, so it takes a second, explicit opt-in.
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+if not os.environ.get("ORC_SETUP_ALLOW_NONLOOPBACK"):
+    _non_loopback = [h for h in ORC_SETUP_ALLOWED_HOSTS if h.lower() not in _LOOPBACK_HOSTS]
+    if _non_loopback:
+        raise ImproperlyConfigured(
+            f"ORC_SETUP_ALLOWED_HOSTS contains non-loopback entries {_non_loopback}. "
+            "The setup wizard collects credentials and is meant for localhost only. "
+            "Set ORC_SETUP_ALLOW_NONLOOPBACK=1 if you really intend this."
+        )
 # Base URL printed by `manage.py setup_token` — where the operator's browser opens.
 ORC_SETUP_BASE_URL = os.environ.get("ORC_SETUP_BASE_URL", "http://127.0.0.1:8000")
 # The .env file the wizard writes collected credentials into.
