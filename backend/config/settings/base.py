@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     "apps.gateway",
     "apps.hostlink",
     "apps.supervisor",
+    "apps.setup",
 ]
 
 MIDDLEWARE = [
@@ -169,6 +170,20 @@ ORC_PROMPT_CHAT_ID = os.environ.get("ORC_PROMPT_CHAT_ID") or os.environ.get(
 # Multi-host (apps.hostlink): pre-shared one-time enrollment secret a host daemon
 # presents once to receive a per-host token.
 ORC_ENROLL_SECRET = os.environ.get("ORC_ENROLL_SECRET", "")
+
+# First-run setup wizard (apps.setup). The wizard is token-gated and reachable
+# only on loopback: ORC_SETUP_ALLOWED_HOSTS pins the Host header, which defeats
+# DNS rebinding from a malicious page (a REMOTE_ADDR check would instead break
+# under Docker, where the peer address is the bridge gateway, not 127.0.0.1).
+ORC_SETUP_ALLOWED_HOSTS = [
+    h.strip()
+    for h in os.environ.get("ORC_SETUP_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if h.strip()
+]
+# Base URL printed by `manage.py setup_token` — where the operator's browser opens.
+ORC_SETUP_BASE_URL = os.environ.get("ORC_SETUP_BASE_URL", "http://127.0.0.1:8000")
+# The .env file the wizard writes collected credentials into.
+ORC_SETUP_ENV_FILE = os.environ.get("ORC_SETUP_ENV_FILE", str(BASE_DIR.parent / "deploy" / ".env"))
 
 # Public backend URL embedded in QR pairing payloads (`/pair`, `manage.py orc_pair`).
 # Empty => the pairing payload degrades to just the code (manual --backend still works).

@@ -17,4 +17,5 @@ urlpatterns = [
     path("api/connectors/", include("apps.connectors.urls", namespace="connectors")),
     path("api/gateway/", include("apps.gateway.urls", namespace="gateway")),
     path("api/hostlink/", include("apps.hostlink.urls", namespace="hostlink")),
+    path("api/setup/", include("apps.setup.urls", namespace="orc_setup")),
 ]

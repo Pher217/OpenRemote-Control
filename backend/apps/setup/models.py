@@ -1,0 +1,167 @@
+"""Models for the first-run setup wizard.
+
+Two objects, both deliberately small:
+
+``SetupToken``
+    The one-time credential that gates every ``/api/setup/*`` route. The
+    installer opens the wizard at ``…/setup?token=<t>``; without a live token
+    the routes are inert. Only the SHA-256 of the token is stored, so a
+    database dump never yields a usable token.
+
+``SetupState``
+    A singleton row tracking how far the wizard has progressed. Once
+    ``completed_at`` is set the whole setup surface is closed permanently
+    (see ``apps.setup.auth``).
+
+A dedicated token model is used rather than ``connectors.Pairing``: a Pairing
+claim registers an Ed25519 connector public key and carries connector_id /
+tool / scopes semantics. Overloading it for the wizard would couple two
+unrelated lifecycles and pollute the connector audit trail.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import secrets
+from datetime import timedelta
+
+from django.db import models
+from django.utils import timezone
+
+#: How long a freshly minted setup token stays usable.
+TOKEN_TTL = timedelta(hours=24)
+
+#: Bytes of entropy per token (32 bytes -> 43-char urlsafe string).
+TOKEN_BYTES = 32
+
+
+def hash_token(raw: str) -> str:
+    """Return the hex SHA-256 of a raw token — what we persist and index on."""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class SetupToken(models.Model):
+    """A single-use, time-limited credential for the setup wizard.
+
+    The raw value exists only at mint time: :meth:`issue` returns it to the
+    caller and nothing else ever stores it. Lookups go through the indexed
+    hash, and the final comparison is constant-time.
+    """
+
+    token_hash = models.CharField(max_length=64, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"SetupToken({self.token_hash[:8]}… {'consumed' if self.consumed_at else 'live'})"
+
+    @classmethod
+    def issue(cls, *, ttl: timedelta | None = None) -> tuple[SetupToken, str]:
+        """Mint a token, revoking any outstanding ones. Returns (obj, raw)."""
+        cls.objects.filter(consumed_at__isnull=True).update(consumed_at=timezone.now())
+        raw = secrets.token_urlsafe(TOKEN_BYTES)
+        obj = cls.objects.create(
+            token_hash=hash_token(raw),
+            expires_at=timezone.now() + (ttl or TOKEN_TTL),
+        )
+        return obj, raw
+
+    @classmethod
+    def verify(cls, raw: str) -> SetupToken | None:
+        """Return the live token matching ``raw``, or None.
+
+        Lookup is by hash so the raw value is never stored; the comparison is
+        still done with ``compare_digest`` so a partial-hash-collision probe
+        cannot be timed.
+        """
+        if not raw:
+            return None
+        candidate = cls.objects.filter(token_hash=hash_token(raw)).first()
+        if candidate is None:
+            return None
+        if not secrets.compare_digest(candidate.token_hash, hash_token(raw)):
+            return None
+        if not candidate.is_live():
+            return None
+        return candidate
+
+    def is_live(self, now=None) -> bool:
+        """True when the token is neither consumed nor expired."""
+        if now is None:
+            now = timezone.now()
+        return self.consumed_at is None and now < self.expires_at
+
+    def consume(self) -> None:
+        self.consumed_at = timezone.now()
+        self.save(update_fields=["consumed_at"])
+
+
+class SetupState(models.Model):
+    """Singleton row recording wizard progress.
+
+    ``providers`` maps a provider key (``telegram``, ``whatsapp``, …) to its
+    last known connection status; ``runtimes`` does the same for detected
+    coding agents. Both are advisory display state — the authoritative
+    configuration lives in ``deploy/.env`` and the connector tables.
+    """
+
+    STAGE_PROVIDERS = "providers"
+    STAGE_RUNTIMES = "runtimes"
+    STAGE_DONE = "done"
+    STAGE_CHOICES = [
+        (STAGE_PROVIDERS, "Connect chat providers"),
+        (STAGE_RUNTIMES, "Connect agent runtimes"),
+        (STAGE_DONE, "Complete"),
+    ]
+
+    singleton = models.BooleanField(default=True, unique=True, editable=False)
+    stage = models.CharField(max_length=32, choices=STAGE_CHOICES, default=STAGE_PROVIDERS)
+    providers = models.JSONField(default=dict)
+    runtimes = models.JSONField(default=dict)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"SetupState({self.stage})"
+
+    @classmethod
+    def load(cls) -> SetupState:
+        """Return the singleton row, creating it on first access."""
+        obj, _ = cls.objects.get_or_create(singleton=True)
+        return obj
+
+    @property
+    def is_complete(self) -> bool:
+        return self.completed_at is not None
+
+    @property
+    def connected_providers(self) -> list[str]:
+        return sorted(k for k, v in self.providers.items() if v == "connected")
+
+    def advance_to(self, stage: str) -> None:
+        """Move the wizard to ``stage``.
+
+        Stage 2 requires at least one connected chat provider — a session that
+        never connected a chat surface has nowhere to deliver turns, which is
+        the whole point of the product.
+        """
+        if stage not in dict(self.STAGE_CHOICES):
+            raise ValueError(f"unknown setup stage: {stage}")
+        if stage in (self.STAGE_RUNTIMES, self.STAGE_DONE) and not self.connected_providers:
+            raise ValueError("at least one chat provider must be connected first")
+        self.stage = stage
+        if stage == self.STAGE_DONE:
+            self.completed_at = timezone.now()
+        self.save(update_fields=["stage", "completed_at", "updated_at"])
+
+    def set_provider(self, key: str, status: str) -> None:
+        self.providers[key] = status
+        self.save(update_fields=["providers", "updated_at"])
+
+    def set_runtime(self, key: str, status: str) -> None:
+        self.runtimes[key] = status
+        self.save(update_fields=["runtimes", "updated_at"])
