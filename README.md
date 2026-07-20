@@ -75,7 +75,7 @@ deploy/               Docker Compose, Caddy, and headscale deployment configs
 
 ## Status — write+stream driving is live
 
-The backend and host-agent daemon are implemented and tested: **~800 tests passing** (542 backend, 262 host-agent), live ASGI smoke test green.
+The backend and host-agent daemon are implemented and tested: **~1,000 tests passing** (727 backend, 270 host-agent), live ASGI smoke test green.
 
 **Shipped:**
 
@@ -144,7 +144,20 @@ The fastest way to a working setup — one command brings up the whole stack (ba
 ./quickstart.sh
 ```
 
-You'll need three things it can't do for you: Docker installed, a Telegram bot token from [@BotFather](https://t.me/BotFather), and a Telegram group with Topics enabled (add your bot as admin). The script generates all secrets, validates your token, auto-discovers your chat, starts everything, and enrolls the daemon — then you run `/openremote-control` in Claude Code. See [deploy/README.md](deploy/README.md) for the manual/production path.
+You'll need three things it can't do for you: Docker installed, [`uv`](https://docs.astral.sh/uv/getting-started/installation/), a Telegram bot token from [@BotFather](https://t.me/BotFather), and a Telegram group with Topics enabled (add your bot as admin). The script generates all secrets, validates your token, auto-discovers your chat, starts the stack, then installs and enrolls this machine's host daemon.
+
+If enrollment doesn't complete, the script says so explicitly and prints the commands to finish — it will not report success without an enrolled daemon, because `/openremote-control` cannot work until the daemon is running. Start it with the command the script prints, then run `/openremote-control` in Claude Code. See [deploy/README.md](deploy/README.md) for the manual/production path, and [Troubleshooting](#troubleshooting) if something stalls.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Telegram chat auto-discovery timed out during `quickstart.sh` | The allowlist is left empty and the default-deny policy drops everything | Set `TELEGRAM_ALLOWED_CHAT_IDS`, `TELEGRAM_FORUM_CHAT_ID`, and `ORC_PROMPT_CHAT_ID` in `deploy/.env`, then `docker compose --env-file deploy/.env -f deploy/app/docker-compose.yml up -d` to restart with the new values |
+| Backend health check never goes green | The `web` container is failing to start or migrate | `docker compose -f deploy/app/docker-compose.yml logs web` |
+| "This session doesn't accept typed input" in Telegram | The thread is not a driveable session — chat is mirror-only for that thread | Start a driveable session with `/openremote-control` in Claude Code first, then reply in its topic |
+| Bot receives nothing / input is silently ignored | Two `run_telegram_bot` processes are running and stealing each other's `getUpdates` | Confirm exactly one is running, e.g. `docker compose -f deploy/app/docker-compose.yml ps telegram-bot`, and make sure no local `python manage.py run_telegram_bot` is also running |
+| Port already in use (8000 / 5432 / 5544) | Another process is bound to the backend (`8000`) or a local dev Postgres (`5544`→`5432`) | `lsof -i :8000` / `lsof -i :5544`, stop the conflicting process, or change the port mapping before bringing the stack up |
+| `/openremote-control` never dispatches — the host daemon was never installed | This is the most common gap after `quickstart.sh`: the backend is up but this machine isn't enrolled | `cd host-agent && uv sync && .venv/bin/orc-host enroll --backend <BACKEND_URL> --secret "$ORC_ENROLL_SECRET"`, then `ORC_HEADLESS_ENGINE=interactive .venv/bin/orc-host daemon` |
 
 ## Run the backend (dev)
 

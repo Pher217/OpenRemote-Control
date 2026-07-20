@@ -2,7 +2,7 @@
 
 ## Project overview
 
-OpenRemote-Control is a self-hosted control plane for AI coding agents (Codex, Codex, Gemini, and any MCP-capable tool). It dispatches each coding-agent session to a chat topic in an app you already supervise (Telegram first, or WhatsApp/Slack/Discord/Signal/iMessage via a Node sidecar). The backend is Django + DRF + Channels (ASGI) backed by PostgreSQL and Valkey; a per-machine Python host-agent daemon enrolls each host and streams PTY turns; an installable MCP bridge (`orc-mcp`) gives agents four dispatch calls routed through the sovereign backend. A persistent `Codex -p` stream-json engine drives headless sessions turn-by-turn, while a scoped editor-turn mirror surfaces typed-in-editor turns without double-posting chat-driven ones.
+OpenRemote-Control is a self-hosted control plane for AI coding agents (Claude Code, Codex, Gemini, and any MCP-capable tool). It dispatches each coding-agent session to a chat topic in an app you already supervise (Telegram first, or WhatsApp/Slack/Discord/Signal/iMessage via a Node sidecar). The backend is Django + DRF + Channels (ASGI) backed by PostgreSQL and Valkey; a per-machine Python host-agent daemon enrolls each host and streams PTY turns; an installable MCP bridge (`orc-mcp`) gives agents four dispatch calls routed through the sovereign backend. A persistent `claude -p` stream-json engine drives headless sessions turn-by-turn, while a scoped editor-turn mirror surfaces typed-in-editor turns without double-posting chat-driven ones.
 
 ## Repository layout
 
@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs the same suites per job: backend also lints
 ## Key conventions
 
 - **ASGI only.** Daphne serves the app (HTTP + WebSockets). Never use `runserver` — it cannot serve Channels WebSockets.
-- **Headless engine selection.** `ORC_HEADLESS_ENGINE` selects the daemon's drive engine: `interactive` (one long-lived `Codex -p` stream-json process per session), `sdk` (Agent SDK path), or unset (CLI prompt path). The deploy `run-daemon.sh` wrapper reads this.
+- **Headless engine selection.** `ORC_HEADLESS_ENGINE` selects the daemon's drive engine: `interactive` (one long-lived `claude -p` stream-json process per session), `sdk` (Agent SDK path), or unset (CLI prompt path). The deploy `run-daemon.sh` wrapper reads this.
 - **Transcript tail is single-file.** The transcript tail must NEVER scan directories — it tails one transcript path only. Directory scans are an O(N) footgun that was removed; do not reintroduce them.
 - **Frame shape.** Frames between the host-agent daemon and the backend WebSocket consumer are data-wrapped: `{type: "<name>", data: {...}}`. Keep that envelope; consumers dispatch on `type` and read fields from `data`.
 - **Telegram allowlist is default-deny.** Only allowlisted chat/topic IDs receive responses; everything else is dropped. Do not widen this without a policy change.
@@ -36,7 +36,8 @@ CI (`.github/workflows/ci.yml`) runs the same suites per job: backend also lints
 
 ## Boundary rules
 
-- **Do not touch `backend/apps/hostlink/security.py` or `host-agent/agent_host/input_policy.py` without a security review.** The former is the HMAC host-enrollment/signing core, the latter the PTY input-safety policy; open an issue and get design review before editing either.
+- **Do not touch `backend/apps/hostlink/security.py`, `host-agent/agent_host/input_policy.py`, or `backend/apps/threads/consumers.py` without a security review.** The first is the HMAC host-enrollment/signing core; the second is the PTY input-safety classifier; the third gates the thread WebSocket behind an authenticated session. Open an issue and get design review before editing any of them.
+- **The input classifier covers ONE path only.** `input_policy.py` runs solely on raw PTY injection (`pty_session.send_keys`). It does **not** run on the headless engines, which are the shipped default and launch the CLI with `bypassPermissions`. It is a denylist speed-bump against operator mistakes, not a security boundary — do not describe it as one, and do not assume adding patterns makes the drive path safe. See SECURITY.md, "What the input classifier does and does not cover".
 - **Never commit `.env`, `orc-stack.env`, or any `*.key`/`*.pem`/`*.p12`/`*.pfx`.** `deploy/orc-stack/orc-stack.env` is gitignored; only the `.env.example` is tracked. Check staged files for these patterns before every commit.
 - **Never run two `run_telegram_bot` processes.** The Telegram `getUpdates` consumer is single-instance by contract; a second process polls and steals updates. The launchd `run-bot.sh` supervisor enforces exactly-one; respect it.
-- **No AI attribution in git artifacts.** No `Co-Authored-By`, `Authored-By`, or AI/Codex/Anthropic mentions in commits, PRs, branches, or comments.
+- **No AI attribution in git artifacts.** No `Co-Authored-By`, `Authored-By`, or AI/Claude/Anthropic mentions in commits, PRs, branches, or comments.

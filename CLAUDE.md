@@ -36,7 +36,8 @@ CI (`.github/workflows/ci.yml`) runs the same suites per job: backend also lints
 
 ## Boundary rules
 
-- **Do not touch `backend/apps/hostlink/security.py` or `host-agent/agent_host/input_policy.py` without a security review.** The former is the HMAC host-enrollment/signing core, the latter the PTY input-safety policy; open an issue and get design review before editing either.
+- **Do not touch `backend/apps/hostlink/security.py`, `host-agent/agent_host/input_policy.py`, or `backend/apps/threads/consumers.py` without a security review.** The first is the HMAC host-enrollment/signing core; the second is the PTY input-safety classifier; the third gates the thread WebSocket behind an authenticated session. Open an issue and get design review before editing any of them.
+- **The input classifier covers ONE path only.** `input_policy.py` runs solely on raw PTY injection (`pty_session.send_keys`). It does **not** run on the headless engines, which are the shipped default and launch the CLI with `bypassPermissions`. It is a denylist speed-bump against operator mistakes, not a security boundary — do not describe it as one, and do not assume adding patterns makes the drive path safe. See SECURITY.md, "What the input classifier does and does not cover".
 - **Never commit `.env`, `orc-stack.env`, or any `*.key`/`*.pem`/`*.p12`/`*.pfx`.** `deploy/orc-stack/orc-stack.env` is gitignored; only the `.env.example` is tracked. Check staged files for these patterns before every commit.
 - **Never run two `run_telegram_bot` processes.** The Telegram `getUpdates` consumer is single-instance by contract; a second process polls and steals updates. The launchd `run-bot.sh` supervisor enforces exactly-one; respect it.
 - **No AI attribution in git artifacts.** No `Co-Authored-By`, `Authored-By`, or AI/Claude/Anthropic mentions in commits, PRs, branches, or comments.

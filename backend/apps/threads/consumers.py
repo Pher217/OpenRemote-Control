@@ -2,6 +2,18 @@
 
 Handles per-thread connections, dispatches incoming text to the thread runtime,
 and broadcasts events to all clients in the thread's channel group.
+
+Authentication
+--------------
+This endpoint accepts text that is dispatched into a live thread runtime
+(``dispatch_text``), so an unauthenticated connection would be a remote input
+surface into an agent session.  Connections therefore require an authenticated
+Django user; anonymous connections are closed with code 4401 before the thread
+is looked up.  ``config.asgi`` supplies ``scope["user"]`` via
+``AuthMiddlewareStack``.
+
+Knowing a thread UUID is NOT authorization — UUIDs leak through logs, URLs and
+screenshots.  Do not relax this gate without a security review.
 """
 
 import contextlib
@@ -15,6 +27,11 @@ from apps.threads.models import Thread
 
 class ThreadConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
+        user = self.scope.get("user")
+        if user is None or not user.is_authenticated:
+            await self.close(code=4401)
+            return
+
         self.thread_id = self.scope["url_route"]["kwargs"]["thread_id"]
         self.thread = await self._get_thread(self.thread_id)
         if self.thread is None:

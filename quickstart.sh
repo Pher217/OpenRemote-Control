@@ -59,6 +59,10 @@ if [ -z "${REUSE_ENV:-}" ]; then
   [ -f "$ENV_EXAMPLE" ] || die "deploy/.env.example not found — are you running this from the repo root?"
   say "Generating deploy/.env with fresh secrets"
   cp "$ENV_EXAMPLE" "$ENV_FILE"
+  # This file is about to hold the bot token and every control-plane secret.
+  # .env.example ships 0644; narrow it before anything is written into it so
+  # the secrets are never briefly world-readable on a multi-user host.
+  chmod 600 "$ENV_FILE"
   # Fill the auto-generated secrets (portable in-place sed via a temp file).
   set_kv() { # $1=key $2=value
     python3 - "$ENV_FILE" "$1" "$2" <<'PY'
@@ -159,23 +163,56 @@ elif command -v orc-host >/dev/null 2>&1; then
   HOST_BIN="$(command -v orc-host)"
 fi
 
+# On a fresh clone host-agent is not installed yet. Install it here rather than
+# printing instructions and declaring success — the daemon is what actually
+# drives sessions, so without it /openremote-control cannot work.
+if [ -z "$HOST_BIN" ]; then
+  if command -v uv >/dev/null 2>&1; then
+    say "Installing host-agent (uv sync)"
+    if (cd "$REPO_ROOT/host-agent" && uv sync >/dev/null 2>&1); then
+      [ -x "$REPO_ROOT/host-agent/.venv/bin/orc-host" ] \
+        && HOST_BIN="$REPO_ROOT/host-agent/.venv/bin/orc-host"
+    else
+      warn "uv sync failed in host-agent/."
+    fi
+  else
+    warn "uv is not installed — cannot install the host-agent automatically."
+    echo "    Install uv:  https://docs.astral.sh/uv/getting-started/installation/"
+  fi
+fi
+
+HOST_READY=0
 if [ -n "$HOST_BIN" ] && [ -n "$ENROLL_SECRET" ]; then
-  "$HOST_BIN" enroll --backend "$BACKEND_URL" --secret "$ENROLL_SECRET" \
-    && ok "Host enrolled" \
-    || warn "Enrollment failed — run it manually (see below)."
-  echo
-  say "Start the host daemon (keep this running while you drive sessions):"
-  echo "  ORC_HEADLESS_ENGINE=interactive $HOST_BIN daemon"
-else
-  warn "host-agent not installed yet. To enroll this machine:"
-  echo "    cd host-agent && uv sync && \\"
-  echo "    .venv/bin/orc-host enroll --backend $BACKEND_URL --secret \"\$ORC_ENROLL_SECRET\""
-  echo "    ORC_HEADLESS_ENGINE=interactive .venv/bin/orc-host daemon"
+  if "$HOST_BIN" enroll --backend "$BACKEND_URL" --secret "$ENROLL_SECRET"; then
+    ok "Host enrolled"
+    HOST_READY=1
+  else
+    warn "Enrollment failed."
+  fi
+elif [ -z "$ENROLL_SECRET" ]; then
+  warn "ORC_ENROLL_SECRET missing from $ENV_FILE — cannot enroll."
 fi
 
 # --- done -----------------------------------------------------------------
 echo
-ok "Setup complete."
-echo "  Next: open Claude Code and run  ${c_bold}/openremote-control${c_reset}"
-echo "  Then reply in your Telegram group to drive the session from your phone."
+if [ "$HOST_READY" -eq 1 ]; then
+  ok "Setup complete."
+  echo
+  say "Start the host daemon (keep this running while you drive sessions):"
+  echo "  ORC_HEADLESS_ENGINE=interactive $HOST_BIN daemon"
+  echo
+  echo "  Then: open Claude Code and run  ${c_bold}/openremote-control${c_reset}"
+  echo "  Reply in your Telegram group to drive the session from your phone."
+else
+  warn "Setup INCOMPLETE — the backend is up, but this machine is not enrolled."
+  echo "  /openremote-control will not work until the host daemon is enrolled."
+  echo
+  echo "  Finish with:"
+  echo "    cd host-agent && uv sync && \\"
+  echo "      .venv/bin/orc-host enroll --backend $BACKEND_URL --secret \"\$ORC_ENROLL_SECRET\""
+  echo "    ORC_HEADLESS_ENGINE=interactive .venv/bin/orc-host daemon"
+  echo
+  echo "  ORC_ENROLL_SECRET is in $ENV_FILE."
+fi
+echo
 echo "  Stop the stack:  docker compose -f $COMPOSE_FILE down"
