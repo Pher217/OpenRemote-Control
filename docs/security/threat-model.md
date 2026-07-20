@@ -96,3 +96,33 @@ Telegram API  ──(bot token, HTTPS)──▶  Backend (Django/Channels)
   activity).
 - Prefer `ORC_HEADLESS_ENGINE=sdk` over the default when driving a host whose
   blast radius from an errant or malicious command would be high.
+
+## Input classifier scope
+
+The input classifier implemented in `host-agent/agent_host/input_policy.py`
+has a very narrow scope. It is invoked from exactly one production path:
+`pty_session.send_keys`, which injects raw PTY keystrokes. That is its only
+non-test caller.
+
+| Engine / session path | Classifier runs? | Notes |
+|---|---|---|
+| `interactive_engine` (default) | No | `ORC_HEADLESS_ENGINE=interactive` is the shipped default, so on a default install the classifier never executes at all. |
+| `claude_headless` | No | Launches the CLI with `--permission-mode bypassPermissions`. |
+| `sdk_session` | No | Uses the explicit Allow/Deny approval flow instead of regex classification. |
+| `pty_session.send_keys` | Yes | Denylist speed-bump only. |
+
+`interactive_engine` and `claude_headless` both launch the CLI with
+`--permission-mode bypassPermissions`, so there is no per-tool gate on those
+paths; the only control is the Telegram identity allowlist.
+
+On the PTY path the classifier is a **denylist speed-bump against operator
+mistakes and careless pasting**, not a security boundary. It is known-bypassable
+by construction. Examples include:
+
+- using `$HOME` instead of `~`,
+- quoting to break token matches,
+- splitting a download and its execution into two separately-benign commands,
+- indirect interpreters such as `perl -e`, `awk 'BEGIN{system()}'`, and
+  `python -c`.
+
+Adding more regex patterns does not turn it into a boundary.

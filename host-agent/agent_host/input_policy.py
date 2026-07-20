@@ -6,12 +6,38 @@ intentionally kept dependency-free so it can be imported in any context —
 including the test suite — without requiring libtmux, a running tmux server,
 or any PTY support.
 
-Design intent
--------------
-When the operator sends text to an 'orc run' session we apply a
-conservative, default-deny classification before anything reaches tmux
-send-keys.  Three outcomes are possible:
+SCOPE — read this before relying on it
+--------------------------------------
+This classifier guards exactly ONE path: raw keystroke injection into a tmux
+pane via ``pty_session.send_keys`` (the ``orc run`` / PTY drive path).  It is
+the only non-test caller.
 
+It does **NOT** guard the headless engines (``interactive_engine``,
+``claude_headless``, ``sdk_session``).  Text dispatched to a headless session
+is a natural-language prompt for the agent, not a shell command, so it is
+never classified here.  ``interactive_engine`` and ``claude_headless`` launch
+the CLI with ``--permission-mode bypassPermissions``, meaning the agent
+executes tools without a per-tool gate.  ``ORC_HEADLESS_ENGINE=interactive``
+is the shipped default, so on a default install **no part of this module is
+in the loop**.  See SECURITY.md ("Trust model") for what actually protects
+that path: the Telegram identity allowlist, and nothing else.
+
+Threat model — what this is and is not
+--------------------------------------
+This is a **denylist speed-bump against operator mistakes and careless
+pasting**, not a security boundary.  It cannot be one: it pattern-matches
+free-form shell text, and shell offers unbounded ways to spell the same
+effect (``$HOME`` for ``~``, quoting to break token matches, staging a
+download and running it as two separate benign-looking commands, indirect
+interpreters like ``perl -e`` / ``awk 'BEGIN{system()}'``).  Known-bypassable
+by design.
+
+Treat a host that accepts remote input as a host on which the allowlisted
+chat identity can run arbitrary code.  Isolate it accordingly.  Do not add
+patterns here and conclude the path is safe.
+
+Outcomes
+--------
   SAFE      — a single, short, plain line that looks like a normal command
                (e.g. "ls\\n", "git status\\n").  No approval gate required.
 
@@ -23,8 +49,9 @@ send-keys.  Three outcomes are possible:
                workspace.  Approval is required, and callers should
                default to rejecting outright.
 
-Anything that does not match a SAFE profile is escalated to at least REVIEW
-(default-deny bias).
+Unmatched input falls through to SAFE.  The "default-deny" bias applies only
+to inputs that trip a structural check (multiline, length, chain metachars) —
+it is not a whitelist.
 """
 
 from __future__ import annotations
@@ -111,9 +138,13 @@ _CHAIN_META_RE = re.compile(
     r"|(?<!\|)\|(?!\|)"  # pipe (but not ||)
     r"|(?<!;);(?!;)"     # semicolon (but not ;;)
     r"|`"           # backtick substitution
-    r"|\$\("        # $(...) substitution
+    r"|\$\("        # $(...) substitution — also covers $(<file)
+    r"|<\("         # <(...) process substitution: bash <(curl …)
+    r"|<<<"         # here-string: bash <<< 'curl …'
     r"|>>"          # append redirect
     r"|(?<![>])>(?![>])"  # single redirect
+    r"|(?<![<])<(?![<])"  # single input redirect: bash < /tmp/x.sh
+    r"|(?<!&)&(?!&)"      # backgrounding (but not &&, already matched above)
     r")"
 )
 
@@ -243,7 +274,10 @@ def classify_input(text: str) -> dict:  # type: ignore[type-arg]
 
     # 6. Shell chaining / backgrounding metacharacters
     if _contains_chain_meta(normalized):
-        reasons.append("contains shell chaining or redirect metacharacters (&&, ||, |, ;, `, $(), >, >>)")
+        reasons.append(
+            "contains shell chaining, substitution or redirect metacharacters "
+            "(&&, ||, |, ;, &, `, $(), <(), <<<, <, >, >>)"
+        )
         return {"risk": Risk.REVIEW, "reasons": reasons, "requires_approval": True}
 
     # --- SAFE ---

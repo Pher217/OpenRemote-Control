@@ -150,7 +150,7 @@ TELEGRAM_ALLOWED_CHAT_IDS = {
     for x in os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "").replace(" ", "").split(",")
     if x
 }
-TELEGRAM_DEFAULT_MODEL = os.environ.get("TELEGRAM_DEFAULT_MODEL", "kimi-k2.6:cloud")
+TELEGRAM_DEFAULT_MODEL = os.environ.get("TELEGRAM_DEFAULT_MODEL", "kimi-k2.7-code:cloud")
 TELEGRAM_FORUM_CHAT_ID = os.environ.get("TELEGRAM_FORUM_CHAT_ID", "")
 TELEGRAM_USER_LABEL = os.environ.get("TELEGRAM_USER_LABEL", "You")
 TELEGRAM_ASSISTANT_LABEL = os.environ.get("TELEGRAM_ASSISTANT_LABEL", "Claude")
