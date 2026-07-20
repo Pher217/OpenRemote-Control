@@ -7,6 +7,8 @@ only the most recently printed URL ever works.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
@@ -27,6 +29,13 @@ class Command(BaseCommand):
             action="store_true",
             help="Print just the URL, for scripting.",
         )
+        parser.add_argument(
+            "--ttl",
+            type=int,
+            default=None,
+            metavar="MINUTES",
+            help="Token lifetime in minutes (default: ORC_SETUP_TOKEN_TTL_MINUTES).",
+        )
 
     def handle(self, *args, **options):
         state = SetupState.load()
@@ -38,11 +47,10 @@ class Command(BaseCommand):
                     )
                 )
                 return
-            state.completed_at = None
-            state.stage = SetupState.STAGE_PROVIDERS
-            state.save(update_fields=["completed_at", "stage", "updated_at"])
+            state.reopen()
 
-        _, raw = SetupToken.issue()
+        ttl = timedelta(minutes=options["ttl"]) if options["ttl"] else None
+        _, raw = SetupToken.issue(ttl=ttl)
         base = settings.ORC_SETUP_BASE_URL.rstrip("/")
         url = f"{base}/setup?token={raw}"
 
@@ -50,10 +58,11 @@ class Command(BaseCommand):
             self.stdout.write(url)
             return
 
-        self.stdout.write(self.style.SUCCESS("Setup token issued."))
+        minutes = options["ttl"] or settings.ORC_SETUP_TOKEN_TTL_MINUTES
+        self.stdout.write(self.style.SUCCESS("Setup wizard ready — open this URL:"))
         self.stdout.write(f"\n  {url}\n")
         self.stdout.write(
-            "Single-use, expires in 24 hours. Do not expose this port publicly.\n"
-            "Note: the /setup page itself is not built yet — until it ships, the "
-            "token is for the /api/setup/* endpoints."
+            f"Expires in {minutes} minutes. Opening it swaps the token for a "
+            "browser session, so the link above stops working immediately after "
+            "first use. Do not expose this port publicly."
         )

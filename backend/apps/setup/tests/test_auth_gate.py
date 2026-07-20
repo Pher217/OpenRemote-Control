@@ -42,6 +42,14 @@ def _connect_provider():
     return state
 
 
+def _ready_for_completion():
+    """Connect a provider and walk to "runtimes" — the only stage from which
+    the real state machine allows advancing to "done" (C1)."""
+    state = _connect_provider()
+    state.advance_to(SetupState.STAGE_RUNTIMES)
+    return state
+
+
 # ---------------------------------------------------------------------------
 # Token presence / validity (403)
 # ---------------------------------------------------------------------------
@@ -195,7 +203,7 @@ class TestNormaliseHostIntegration:
 @pytest.mark.django_db
 class TestSetupClosed:
     def _complete_setup(self):
-        state = _connect_provider()
+        state = _ready_for_completion()
         state.advance_to(SetupState.STAGE_DONE)
 
     def test_state_returns_410_with_valid_token_once_complete(self, client):
@@ -333,20 +341,53 @@ class TestCrossSiteRefusal:
         )
         assert resp.status_code == 403
 
-    def test_allowlisted_origin_returns_200(self, client):
+    def test_matching_origin_and_host_returns_200(self, client):
         """
         GIVEN a valid header token
         WHEN GET /api/setup/state is requested with Origin: http://localhost:8000
+             and a matching Host: localhost:8000 (full netloc match — C3)
         THEN 200 is returned
         """
         raw = _live_token()
         resp = client.get(
             STATE_URL,
-            HTTP_HOST="localhost",
+            HTTP_HOST="localhost:8000",
             HTTP_X_ORC_SETUP_TOKEN=raw,
             HTTP_ORIGIN="http://localhost:8000",
         )
         assert resp.status_code == 200
+
+    def test_origin_on_a_different_loopback_port_returns_403(self, client):
+        """
+        GIVEN a valid header token
+        WHEN GET /api/setup/state is requested with Origin: http://localhost:3000
+             (a dev server on another loopback port) and Host: localhost:8000
+        THEN 403 is returned — a full netloc mismatch, even on loopback
+        """
+        raw = _live_token()
+        resp = client.get(
+            STATE_URL,
+            HTTP_HOST="localhost:8000",
+            HTTP_X_ORC_SETUP_TOKEN=raw,
+            HTTP_ORIGIN="http://localhost:3000",
+        )
+        assert resp.status_code == 403
+
+    def test_null_origin_returns_403(self, client):
+        """
+        GIVEN a valid header token
+        WHEN GET /api/setup/state is requested with Origin: null (sandboxed
+             iframe or file://)
+        THEN 403 is returned
+        """
+        raw = _live_token()
+        resp = client.get(
+            STATE_URL,
+            HTTP_HOST="localhost:8000",
+            HTTP_X_ORC_SETUP_TOKEN=raw,
+            HTTP_ORIGIN="null",
+        )
+        assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +518,7 @@ class TestCompleteBurnsToken:
         WHEN POST /api/setup/complete is requested
         THEN 200 is returned
         """
-        _connect_provider()
+        _ready_for_completion()
         raw = _live_token()
         resp = client.post(
             COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
@@ -490,7 +531,7 @@ class TestCompleteBurnsToken:
         WHEN POST /api/setup/complete succeeds
         THEN SetupState.load().is_complete is True afterward
         """
-        _connect_provider()
+        _ready_for_completion()
         raw = _live_token()
         client.post(
             COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
@@ -503,7 +544,7 @@ class TestCompleteBurnsToken:
         WHEN the exact same raw token is used again on /api/setup/complete
         THEN 410 is returned (setup is closed, not merely token-invalid)
         """
-        _connect_provider()
+        _ready_for_completion()
         raw = _live_token()
         first = client.post(
             COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
@@ -520,7 +561,7 @@ class TestCompleteBurnsToken:
         WHEN the SetupToken row is reloaded from the database afterward
         THEN its consumed_at column is no longer None
         """
-        _connect_provider()
+        _ready_for_completion()
         obj, raw = SetupToken.issue()
         client.post(
             COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
@@ -535,9 +576,40 @@ class TestCompleteBurnsToken:
         THEN it returns None (the token itself was burned, not merely
              shadowed by the setup-closed check)
         """
-        _connect_provider()
+        _ready_for_completion()
         _obj, raw = SetupToken.issue()
         client.post(
             COMPLETE_URL, format="json", HTTP_HOST="localhost", HTTP_X_ORC_SETUP_TOKEN=raw
         )
         assert SetupToken.verify(raw) is None
+
+
+@pytest.mark.django_db
+class TestCheckOrdering:
+    """The host gate runs before the setup-closed check, so an outsider cannot
+    read 410-vs-403 to learn whether this installation is already set up."""
+
+    @override_settings(ALLOWED_HOSTS=["localhost", "127.0.0.1", "evil.example.com"])
+    def test_disallowed_host_returns_403_not_410_when_setup_is_complete(self, client):
+        """
+        GIVEN setup has been completed
+        WHEN a request arrives from a host outside ORC_SETUP_ALLOWED_HOSTS
+        THEN 403 is returned, not the 410 that would reveal completion
+        """
+        state = _connect_provider()
+        state.advance_to(SetupState.STAGE_RUNTIMES)
+        state.advance_to(SetupState.STAGE_DONE)
+        resp = client.get(STATE_URL, {"token": _live_token()}, HTTP_HOST="evil.example.com")
+        assert resp.status_code == 403
+
+    def test_allowed_host_still_returns_410_when_setup_is_complete(self, client):
+        """
+        GIVEN setup has been completed
+        WHEN a request arrives from an allowlisted loopback host
+        THEN 410 is returned, so the legitimate operator still learns the state
+        """
+        state = _connect_provider()
+        state.advance_to(SetupState.STAGE_RUNTIMES)
+        state.advance_to(SetupState.STAGE_DONE)
+        resp = client.get(STATE_URL, {"token": _live_token()}, HTTP_HOST="localhost")
+        assert resp.status_code == 410

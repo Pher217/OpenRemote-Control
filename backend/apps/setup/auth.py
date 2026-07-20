@@ -29,7 +29,7 @@ from rest_framework import status
 from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.permissions import BasePermission
 
-from apps.setup.models import SetupState, SetupToken
+from apps.setup.models import SESSION_COOKIE_NAME, SetupState, SetupToken
 
 #: Header the wizard's XHRs use. The initial page load uses ``?token=`` instead,
 #: since a browser navigation cannot set headers.
@@ -50,10 +50,16 @@ class SetupClosed(APIException):
 
 
 def extract_token(request) -> str:
-    """Pull the raw token from the header, or the query param on safe methods."""
+    """Pull the raw token from the header, the session cookie, or (on safe
+    methods only) the query param."""
     header = request.META.get(TOKEN_HEADER, "")
     if header:
         return header.strip()
+    # Set by the /setup exchange. HttpOnly + SameSite=Strict, so it is neither
+    # script-readable nor attached to cross-site requests.
+    cookie = request.COOKIES.get(SESSION_COOKIE_NAME, "")
+    if cookie:
+        return cookie.strip()
     if request.method in QUERY_PARAM_METHODS:
         return request.query_params.get(TOKEN_QUERY_PARAM, "").strip()
     return ""
@@ -96,9 +102,14 @@ def is_cross_site(request) -> bool:
         return True
     origin = request.META.get("HTTP_ORIGIN", "").strip()
     if origin:
-        origin_host = urlparse(origin).hostname or ""
-        allowed = {h.strip().rstrip(".").lower() for h in settings.ORC_SETUP_ALLOWED_HOSTS}
-        if origin_host.lower() not in allowed:
+        # Compare host AND port against the request's own host. Matching on
+        # hostname alone would treat http://localhost:3000 — a dev server, or
+        # anything else the operator is running on loopback — as same-origin
+        # and let it drive setup. "null" (sandboxed iframe, file://) never
+        # matches, which is intended.
+        parsed = urlparse(origin)
+        origin_netloc = (parsed.netloc or "").lower()
+        if origin_netloc != request.META.get("HTTP_HOST", "").strip().lower():
             return True
     return False
 
@@ -109,8 +120,8 @@ class SetupTokenPermission(BasePermission):
     message = "A valid setup token is required."
 
     def has_permission(self, request, view) -> bool:
-        if SetupState.load().is_complete:
-            raise SetupClosed()
+        # Host first: a caller that has no business here should not be able to
+        # learn whether setup is complete by reading 410 versus 403.
         if not host_allowed(request):
             raise PermissionDenied(
                 "The setup wizard is only reachable on localhost. "
@@ -123,6 +134,8 @@ class SetupTokenPermission(BasePermission):
             raise PermissionDenied("The setup wizard does not accept proxied requests.")
         if is_cross_site(request):
             raise PermissionDenied("Cross-origin requests to the setup wizard are refused.")
+        if SetupState.load().is_complete:
+            raise SetupClosed()
         token = SetupToken.verify(extract_token(request))
         if token is None:
             return False

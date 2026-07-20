@@ -6,9 +6,17 @@ from datetime import timedelta
 
 import pytest
 from django.db import models
+from django.test import override_settings
 from django.utils import timezone
 
 from apps.setup.models import SetupState, SetupToken, hash_token
+
+
+def _walk_to_done(state: SetupState) -> None:
+    """Drive a fresh SetupState through the real providers->runtimes->done path."""
+    state.set_provider("telegram", "connected")
+    state.advance_to(SetupState.STAGE_RUNTIMES)
+    state.advance_to(SetupState.STAGE_DONE)
 
 
 @pytest.mark.django_db
@@ -267,48 +275,215 @@ class TestSetupStateAdvanceTo:
         state.advance_to(SetupState.STAGE_RUNTIMES)
         assert state.stage == SetupState.STAGE_RUNTIMES
 
-    def test_advance_to_done_succeeds_after_provider_connected(self):
+    def test_advance_to_done_succeeds_after_walking_the_full_path(self):
         """
-        GIVEN a SetupState with a connected telegram provider
-        WHEN advance_to("done") is called
+        GIVEN a SetupState walked providers -> runtimes with a connected provider
+        WHEN advance_to("done") is called from "runtimes"
         THEN the stage becomes "done"
         """
         state = SetupState.load()
         state.set_provider("telegram", "connected")
+        state.advance_to(SetupState.STAGE_RUNTIMES)
         state.advance_to(SetupState.STAGE_DONE)
         assert state.stage == SetupState.STAGE_DONE
 
     def test_advance_to_done_sets_completed_at(self):
         """
-        GIVEN a SetupState with a connected provider
+        GIVEN a SetupState walked providers -> runtimes -> done
         WHEN advance_to("done") is called
         THEN completed_at is no longer None
         """
         state = SetupState.load()
-        state.set_provider("telegram", "connected")
-        state.advance_to(SetupState.STAGE_DONE)
+        _walk_to_done(state)
         assert state.completed_at is not None
 
     def test_advance_to_done_sets_is_complete(self):
         """
-        GIVEN a SetupState with a connected provider
+        GIVEN a SetupState walked providers -> runtimes -> done
         WHEN advance_to("done") is called
         THEN is_complete reports True
         """
         state = SetupState.load()
-        state.set_provider("telegram", "connected")
-        state.advance_to(SetupState.STAGE_DONE)
+        _walk_to_done(state)
         assert state.is_complete is True
 
-    def test_advance_to_providers_does_not_require_a_connected_provider(self):
+    def test_advance_from_providers_directly_to_done_raises_value_error(self):
         """
-        GIVEN a fresh SetupState with no connected providers
-        WHEN advance_to("providers") is called (the starting stage itself)
-        THEN no exception is raised and the stage stays "providers"
+        GIVEN a fresh SetupState with a connected provider, still at "providers"
+        WHEN advance_to("done") is called (skipping "runtimes")
+        THEN ValueError is raised — providers->done is not an allowed edge
         """
         state = SetupState.load()
-        state.advance_to(SetupState.STAGE_PROVIDERS)
+        state.set_provider("telegram", "connected")
+        with pytest.raises(ValueError):
+            state.advance_to(SetupState.STAGE_DONE)
+
+    def test_advance_to_providers_from_providers_raises_value_error(self):
+        """
+        GIVEN a fresh SetupState already at the "providers" stage
+        WHEN advance_to("providers") is called again
+        THEN ValueError is raised — providers->providers is not an allowed edge
+        """
+        state = SetupState.load()
+        with pytest.raises(ValueError):
+            state.advance_to(SetupState.STAGE_PROVIDERS)
+
+
+FORBIDDEN_EDGES = [
+    (SetupState.STAGE_PROVIDERS, SetupState.STAGE_PROVIDERS),
+    (SetupState.STAGE_PROVIDERS, SetupState.STAGE_DONE),
+    (SetupState.STAGE_DONE, SetupState.STAGE_PROVIDERS),
+    (SetupState.STAGE_DONE, SetupState.STAGE_RUNTIMES),
+    (SetupState.STAGE_DONE, SetupState.STAGE_DONE),
+    (SetupState.STAGE_RUNTIMES, SetupState.STAGE_RUNTIMES),
+]
+
+ALLOWED_EDGES = [
+    (SetupState.STAGE_PROVIDERS, SetupState.STAGE_RUNTIMES),
+    (SetupState.STAGE_RUNTIMES, SetupState.STAGE_PROVIDERS),
+    (SetupState.STAGE_RUNTIMES, SetupState.STAGE_DONE),
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("from_stage,to_stage", FORBIDDEN_EDGES)
+class TestSetupStateForbiddenTransitions:
+    def test_forbidden_edge_raises_value_error(self, from_stage, to_stage):
+        """
+        GIVEN a SetupState sitting at from_stage
+        WHEN advance_to(to_stage) is called for an edge outside ALLOWED_TRANSITIONS
+        THEN ValueError is raised
+        """
+        state = SetupState.load()
+        state.stage = from_stage
+        state.save(update_fields=["stage"])
+        with pytest.raises(ValueError):
+            state.advance_to(to_stage)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("from_stage,to_stage", ALLOWED_EDGES)
+class TestSetupStateAllowedTransitions:
+    def test_allowed_edge_succeeds(self, from_stage, to_stage):
+        """
+        GIVEN a SetupState sitting at from_stage with a connected provider
+        WHEN advance_to(to_stage) is called for an edge inside ALLOWED_TRANSITIONS
+        THEN the stage becomes to_stage
+        """
+        state = SetupState.load()
+        state.set_provider("telegram", "connected")
+        state.stage = from_stage
+        state.save(update_fields=["stage"])
+        state.advance_to(to_stage)
+        assert state.stage == to_stage
+
+
+@pytest.mark.django_db
+class TestSetupStateAdvanceToDoneRequiresProvider:
+    def test_advance_to_done_from_runtimes_without_provider_raises_value_error(self):
+        """
+        GIVEN a SetupState at "runtimes" with no connected provider
+        WHEN advance_to("done") is called
+        THEN ValueError is raised regardless of the transition being allowed
+        """
+        state = SetupState.load()
+        state.stage = SetupState.STAGE_RUNTIMES
+        state.save(update_fields=["stage"])
+        with pytest.raises(ValueError):
+            state.advance_to(SetupState.STAGE_DONE)
+
+
+@pytest.mark.django_db
+class TestSetupStateReopen:
+    def test_reopen_after_completion_resets_stage_to_providers(self):
+        """
+        GIVEN a SetupState that has completed setup
+        WHEN reopen() is called
+        THEN stage is reset to "providers"
+        """
+        state = SetupState.load()
+        _walk_to_done(state)
+        state.reopen()
         assert state.stage == SetupState.STAGE_PROVIDERS
+
+    def test_reopen_after_completion_clears_completed_at(self):
+        """
+        GIVEN a SetupState that has completed setup
+        WHEN reopen() is called
+        THEN completed_at becomes None
+        """
+        state = SetupState.load()
+        _walk_to_done(state)
+        state.reopen()
+        assert state.completed_at is None
+
+    def test_reopen_after_completion_clears_providers(self):
+        """
+        GIVEN a SetupState that has completed setup with a connected provider
+        WHEN reopen() is called
+        THEN the providers dict is empty
+        """
+        state = SetupState.load()
+        _walk_to_done(state)
+        state.reopen()
+        assert state.providers == {}
+
+    def test_reopen_after_completion_clears_runtimes(self):
+        """
+        GIVEN a SetupState that has completed setup
+        WHEN reopen() is called
+        THEN the runtimes dict is empty
+        """
+        state = SetupState.load()
+        _walk_to_done(state)
+        state.set_runtime("claude_code", "detected")
+        state.reopen()
+        assert state.runtimes == {}
+
+    def test_reopen_then_advance_to_runtimes_raises_value_error(self):
+        """
+        GIVEN a SetupState that was completed and then reopened
+        WHEN advance_to("runtimes") is called
+        THEN ValueError is raised because reopen() cleared the provider status
+        """
+        state = SetupState.load()
+        _walk_to_done(state)
+        state.reopen()
+        with pytest.raises(ValueError):
+            state.advance_to(SetupState.STAGE_RUNTIMES)
+
+
+@pytest.mark.django_db
+class TestSetupTokenTTLFromSettings:
+    def test_ttl_override_expires_at_least_4_minutes_out(self):
+        """
+        GIVEN ORC_SETUP_TOKEN_TTL_MINUTES=5 via override_settings
+        WHEN a token is issued
+        THEN expires_at is more than 4 minutes from now
+        """
+        with override_settings(ORC_SETUP_TOKEN_TTL_MINUTES=5):
+            obj, _raw = SetupToken.issue()
+        assert obj.expires_at > timezone.now() + timedelta(minutes=4)
+
+    def test_ttl_override_expires_less_than_6_minutes_out(self):
+        """
+        GIVEN ORC_SETUP_TOKEN_TTL_MINUTES=5 via override_settings
+        WHEN a token is issued
+        THEN expires_at is less than 6 minutes from now
+        """
+        with override_settings(ORC_SETUP_TOKEN_TTL_MINUTES=5):
+            obj, _raw = SetupToken.issue()
+        assert obj.expires_at < timezone.now() + timedelta(minutes=6)
+
+    def test_issue_ttl_argument_overrides_settings(self):
+        """
+        GIVEN ORC_SETUP_TOKEN_TTL_MINUTES=5 via override_settings
+        WHEN issue(ttl=timedelta(minutes=90)) is called
+        THEN expires_at is more than 89 minutes from now — the explicit ttl wins
+        """
+        with override_settings(ORC_SETUP_TOKEN_TTL_MINUTES=5):
+            obj, _raw = SetupToken.issue(ttl=timedelta(minutes=90))
+        assert obj.expires_at > timezone.now() + timedelta(minutes=89)
 
 
 @pytest.mark.django_db
@@ -342,3 +517,70 @@ class TestSetupStateConnectedProviders:
         state = SetupState.load()
         state.set_provider("slack", "")
         assert state.connected_providers == []
+
+
+class TestNormaliseSetupHostGuard:
+    def test_bracketed_ipv6_with_port_strips_to_bare_address(self):
+        """
+        GIVEN "[::1]:8000"
+        WHEN config.settings.base._normalise_setup_host is called
+        THEN "::1" is returned
+        """
+        from config.settings.base import _normalise_setup_host
+
+        assert _normalise_setup_host("[::1]:8000") == "::1"
+
+    def test_hostname_with_port_strips_to_bare_hostname(self):
+        """
+        GIVEN "localhost:8000"
+        WHEN config.settings.base._normalise_setup_host is called
+        THEN "localhost" is returned
+        """
+        from config.settings.base import _normalise_setup_host
+
+        assert _normalise_setup_host("localhost:8000") == "localhost"
+
+    def test_uppercase_with_trailing_dot_is_lowercased_and_stripped(self):
+        """
+        GIVEN "LOCALHOST." (uppercase, trailing dot, no port)
+        WHEN config.settings.base._normalise_setup_host is called
+        THEN "localhost" is returned
+        """
+        from config.settings.base import _normalise_setup_host
+
+        assert _normalise_setup_host("LOCALHOST.") == "localhost"
+
+
+class TestProductionRedirectExemption:
+    """The setup wizard must survive SECURE_SSL_REDIRECT in production (C5).
+
+    Reads config/settings/production.py as text rather than importing it —
+    importing would re-execute config/settings/base.py's module-level env
+    validation, which is unnecessary risk for a test that only needs to know
+    the exempt-pattern strings are present.
+    """
+
+    def _production_settings_source(self) -> str:
+        import importlib.util
+
+        spec = importlib.util.find_spec("config.settings.production")
+        assert spec is not None and spec.origin is not None
+        return open(spec.origin, encoding="utf-8").read()
+
+    def test_setup_page_pattern_is_redirect_exempt(self):
+        """
+        GIVEN the source of config/settings/production.py
+        WHEN it is inspected for SECURE_REDIRECT_EXEMPT
+        THEN the "^setup/?$" pattern is present
+        """
+        source = self._production_settings_source()
+        assert r"^setup/?$" in source
+
+    def test_setup_api_pattern_is_redirect_exempt(self):
+        """
+        GIVEN the source of config/settings/production.py
+        WHEN it is inspected for SECURE_REDIRECT_EXEMPT
+        THEN the "^api/setup/" pattern is present
+        """
+        source = self._production_settings_source()
+        assert r"^api/setup/" in source

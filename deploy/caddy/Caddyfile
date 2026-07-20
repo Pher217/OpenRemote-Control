@@ -15,6 +15,14 @@
 # App — Django / Gunicorn / Channels (WebSocket-transparent)
 # ---------------------------------------------------------------------------
 {$APP_DOMAIN} {
+    # The first-run setup wizard collects bot tokens and API keys and is meant to
+    # be reached only at http://127.0.0.1:8000 by the operator's own browser. Its
+    # own gate already refuses a non-loopback Host, but there is no reason for
+    # these paths to be routable from the internet at all — deny them here so a
+    # future change to that gate cannot silently expose them.
+    @setup path /setup /setup/* /api/setup/*
+    respond @setup 404
+
     reverse_proxy web:8000 {
         header_up X-Forwarded-Proto {scheme}
         header_up X-Real-IP {remote_host}

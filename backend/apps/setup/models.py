@@ -25,11 +25,18 @@ import hashlib
 import secrets
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import models, transaction
 from django.utils import timezone
 
-#: How long a freshly minted setup token stays usable.
-TOKEN_TTL = timedelta(hours=24)
+#: How long a freshly minted setup token stays usable. Short by default: the
+#: installer opens the URL immediately, so a long window only widens the
+#: exposure from browser history and access logs. `setup_token --ttl` raises it
+#: for the operator who is re-opening setup and cannot act right away.
+TOKEN_TTL = timedelta(minutes=30)
+
+#: Name of the HttpOnly cookie the token is exchanged for on first load.
+SESSION_COOKIE_NAME = "orc_setup_session"
 
 #: Bytes of entropy per token (32 bytes -> 43-char urlsafe string).
 TOKEN_BYTES = 32
@@ -60,14 +67,21 @@ class SetupToken(models.Model):
         return f"SetupToken({self.token_hash[:8]}… {'consumed' if self.consumed_at else 'live'})"
 
     @classmethod
+    def default_ttl(cls) -> timedelta:
+        """TTL from settings, falling back to the module default."""
+        minutes = getattr(settings, "ORC_SETUP_TOKEN_TTL_MINUTES", None)
+        return timedelta(minutes=int(minutes)) if minutes else TOKEN_TTL
+
+    @classmethod
     def issue(cls, *, ttl: timedelta | None = None) -> tuple[SetupToken, str]:
         """Mint a token, revoking any outstanding ones. Returns (obj, raw)."""
+        ttl = ttl or cls.default_ttl()
         with transaction.atomic():
             cls.objects.filter(consumed_at__isnull=True).update(consumed_at=timezone.now())
             raw = secrets.token_urlsafe(TOKEN_BYTES)
             obj = cls.objects.create(
                 token_hash=hash_token(raw),
-                expires_at=timezone.now() + (ttl or TOKEN_TTL),
+                expires_at=timezone.now() + ttl,
             )
         return obj, raw
 
@@ -118,6 +132,14 @@ class SetupState(models.Model):
         (STAGE_DONE, "Complete"),
     ]
 
+    #: Permitted stage edges. ``done`` is terminal over the network — only the
+    #: operator's ``setup_token --reopen`` leaves it.
+    ALLOWED_TRANSITIONS = {
+        STAGE_PROVIDERS: {STAGE_RUNTIMES},
+        STAGE_RUNTIMES: {STAGE_PROVIDERS, STAGE_DONE},
+        STAGE_DONE: set(),
+    }
+
     singleton = models.BooleanField(default=True, unique=True, editable=False)
     stage = models.CharField(max_length=32, choices=STAGE_CHOICES, default=STAGE_PROVIDERS)
     providers = models.JSONField(default=dict)
@@ -143,20 +165,38 @@ class SetupState(models.Model):
         return sorted(k for k, v in self.providers.items() if v == "connected")
 
     def advance_to(self, stage: str) -> None:
-        """Move the wizard to ``stage``.
+        """Move the wizard to ``stage`` along an explicitly permitted edge.
 
-        Stage 2 requires at least one connected chat provider — a session that
-        never connected a chat surface has nowhere to deliver turns, which is
-        the whole point of the product.
+        An arbitrary setter would let the wizard jump straight from providers to
+        done, or wander back out of a terminal state and leave ``completed_at``
+        set while ``stage`` said otherwise. The map keeps ``stage`` and
+        ``completed_at`` a single invariant. Going back one step is allowed —
+        the operator may want to revisit providers — but ``done`` is terminal.
         """
         if stage not in dict(self.STAGE_CHOICES):
             raise ValueError(f"unknown setup stage: {stage}")
+        if stage not in self.ALLOWED_TRANSITIONS[self.stage]:
+            raise ValueError(f"cannot move from {self.stage!r} to {stage!r}")
         if stage in (self.STAGE_RUNTIMES, self.STAGE_DONE) and not self.connected_providers:
             raise ValueError("at least one chat provider must be connected first")
         self.stage = stage
         if stage == self.STAGE_DONE:
             self.completed_at = timezone.now()
         self.save(update_fields=["stage", "completed_at", "updated_at"])
+
+    def reopen(self) -> None:
+        """Re-open a completed setup, clearing cached connection status.
+
+        The provider/runtime maps are advisory display state captured at
+        connection time. Carrying them across a reopen would let setup be
+        re-completed immediately on the strength of statuses that may no longer
+        be true, so they are cleared and must be re-established.
+        """
+        self.stage = self.STAGE_PROVIDERS
+        self.completed_at = None
+        self.providers = {}
+        self.runtimes = {}
+        self.save(update_fields=["stage", "completed_at", "providers", "runtimes", "updated_at"])
 
     def set_provider(self, key: str, status: str) -> None:
         self.providers[key] = status

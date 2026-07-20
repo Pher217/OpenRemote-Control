@@ -215,6 +215,8 @@ if os.environ.get("ORC_SETUP_ALLOW_NONLOOPBACK", "").strip().lower() not in {
         )
 # Base URL printed by `manage.py setup_token` — where the operator's browser opens.
 ORC_SETUP_BASE_URL = os.environ.get("ORC_SETUP_BASE_URL", "http://127.0.0.1:8000")
+# Lifetime of a setup token / setup session cookie, in minutes.
+ORC_SETUP_TOKEN_TTL_MINUTES = int(os.environ.get("ORC_SETUP_TOKEN_TTL_MINUTES", "30"))
 # The .env file the wizard writes collected credentials into.
 ORC_SETUP_ENV_FILE = os.environ.get("ORC_SETUP_ENV_FILE", str(BASE_DIR.parent / "deploy" / ".env"))
 
