@@ -1,6 +1,30 @@
+import os
+
+from django.core.exceptions import ImproperlyConfigured
+
 from .base import *
 
 DEBUG = False
+
+# --- Fail closed on unset secrets -----------------------------------------
+# base.py provides development fallbacks so the test suite and a bare `import
+# config.settings` work without a populated environment.  In production those
+# fallbacks are dangerous: a deploy that forgets SECRET_KEY would silently run
+# with a value that is public in this repository, breaking session, CSRF and
+# signed-cookie integrity.  Refuse to boot instead.
+_INSECURE_DEFAULTS = {
+    "SECRET_KEY": "dev-key-do-not-use-in-production",
+    "POSTGRES_PASSWORD": "acc_password",
+}
+
+for _name, _dev_default in _INSECURE_DEFAULTS.items():
+    _value = os.environ.get(_name)
+    if not _value or _value == _dev_default:
+        raise ImproperlyConfigured(
+            f"{_name} must be set to a real value in production settings "
+            f"(it is unset or still the development default). "
+            f"Generate one and put it in your deploy environment file."
+        )
 
 # TLS is terminated by the reverse proxy (Caddy), which forwards
 # X-Forwarded-Proto. Django must trust it, otherwise SECURE_SSL_REDIRECT below

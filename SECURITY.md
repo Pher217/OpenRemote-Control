@@ -92,7 +92,37 @@ This is **trusted-host mode**, and it is a deliberate trade-off, not an oversigh
 - If you want a per-action gate, run `ORC_HEADLESS_ENGINE=sdk`, which routes every
   tool call through an Allow/Deny prompt in the chat before it executes.
 
-**Do not deploy this multi-tenant.** There is no per-connector "drive" scope yet;
+### What the input classifier does and does not cover
+
+`host-agent/agent_host/input_policy.py` is often mistaken for a general safety
+gate. It is not. Be precise about its scope:
+
+| Path | Engine | Classifier runs? | What actually gates it |
+|---|---|---|---|
+| Headless drive (**the default**) | `ORC_HEADLESS_ENGINE=interactive`, or unset | **No** | Telegram identity allowlist only. The agent runs with `bypassPermissions`. |
+| Headless drive, opt-in | `ORC_HEADLESS_ENGINE=sdk` | No | Per-tool Allow/Deny prompt in chat |
+| Raw PTY injection | `orc run` / tmux | Yes | Classifier + approval tap |
+
+Two consequences worth stating plainly:
+
+1. **On a default install the classifier never executes.** Text sent to a
+   headless session is a natural-language prompt for the agent, not a shell
+   command, so it is not classified — and the agent it reaches has no per-tool
+   gate. `input_policy.py` is irrelevant to that path.
+2. **On the PTY path the classifier is a speed-bump, not a boundary.** It is a
+   denylist over free-form shell text and is known-bypassable by construction:
+   `$HOME` for `~`, quoting to break token matches, splitting a download and
+   its execution across two individually-benign commands, or indirect
+   interpreters (`perl -e`, `awk 'BEGIN{system()}'`, `python -c`). Adding
+   patterns does not change this. It catches mistakes and careless pastes; it
+   does not stop an adversary.
+
+Treat any enrolled host as a machine on which the allowlisted chat identity can
+run arbitrary code, and isolate it accordingly. Do not rely on the classifier
+when deciding what a host is allowed to reach.
+
+**Do not deploy this multi-tenant.** There is no per-connector "drive" scope yet
+(scopes are stored on `ConnectorKey` but not enforced at authentication time);
 the design target is one operator per backend.
 
 ## Security-Related Resources

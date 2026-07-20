@@ -4,12 +4,38 @@ import uuid
 import pytest
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.contrib.auth import (
+    BACKEND_SESSION_KEY,
+    HASH_SESSION_KEY,
+    SESSION_KEY,
+    get_user_model,
+)
+from django.contrib.sessions.backends.db import SessionStore
 
 from apps.accounts.models import Account
 from apps.threads.models import Message, Thread
 from config.asgi import application
 
+# Origin only — NOT authentication.  Anonymous connections are rejected (4401).
 HEADERS = [(b"origin", b"http://localhost")]
+
+
+@database_sync_to_async
+def _operator_session_key():
+    """Create an operator user and a live session, returning the session key."""
+    user = get_user_model().objects.create_user(username="operator", password="pw")
+    session = SessionStore()
+    session[SESSION_KEY] = str(user.pk)
+    session[BACKEND_SESSION_KEY] = "django.contrib.auth.backends.ModelBackend"
+    session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+    session.save()
+    return session.session_key
+
+
+async def _auth_headers():
+    """Origin + a session cookie for an authenticated operator."""
+    key = await _operator_session_key()
+    return HEADERS + [(b"cookie", f"sessionid={key}".encode())]
 
 
 class _FakeOllamaResponse:
@@ -77,22 +103,49 @@ def ollama_thread(db):
 class TestThreadConsumer:
     async def test_connect_ok(self, ollama_thread):
         communicator = WebsocketCommunicator(
-            application, f"/ws/threads/{ollama_thread.id}/", headers=HEADERS
+            application, f"/ws/threads/{ollama_thread.id}/", headers=await _auth_headers()
         )
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.disconnect()
 
-    async def test_unknown_thread_rejected(self):
+    async def test_anonymous_connection_rejected(self, ollama_thread):
+        """
+        GIVEN a valid thread id but no authenticated session
+        WHEN a client opens the thread WebSocket
+        THEN the connection is refused
+
+        Knowing a thread UUID must not grant the ability to dispatch text into
+        a live agent session.
+        """
+        communicator = WebsocketCommunicator(
+            application, f"/ws/threads/{ollama_thread.id}/", headers=HEADERS
+        )
+        connected, code = await communicator.connect()
+        assert connected is False
+        assert code == 4401
+
+    async def test_anonymous_cannot_dispatch_to_unknown_thread(self):
+        """Anonymous is rejected on auth, before any thread lookup happens."""
         communicator = WebsocketCommunicator(
             application, f"/ws/threads/{uuid.uuid4()}/", headers=HEADERS
+        )
+        connected, code = await communicator.connect()
+        assert connected is False
+        assert code == 4401
+
+    async def test_unknown_thread_rejected(self):
+        communicator = WebsocketCommunicator(
+            application, f"/ws/threads/{uuid.uuid4()}/", headers=await _auth_headers()
         )
         connected, _ = await communicator.connect()
         assert connected is False
 
     async def test_slash_stop_acks_and_stops(self, ollama_thread):
         communicator = WebsocketCommunicator(
-            application, f"/ws/threads/{ollama_thread.id}/", headers=HEADERS
+            application,
+            f"/ws/threads/{ollama_thread.id}/",
+            headers=await _auth_headers(),
         )
         connected, _ = await communicator.connect()
         assert connected is True
@@ -114,7 +167,7 @@ class TestThreadConsumer:
 async def test_ollama_stream_persists_assistant_message(ollama_thread, monkeypatch):
     monkeypatch.setattr("apps.tier2.ollama.httpx.AsyncClient", _FakeOllamaClient)
     communicator = WebsocketCommunicator(
-        application, f"/ws/threads/{ollama_thread.id}/", headers=HEADERS
+        application, f"/ws/threads/{ollama_thread.id}/", headers=await _auth_headers()
     )
     connected, _ = await communicator.connect()
     assert connected is True
