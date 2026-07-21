@@ -6,6 +6,14 @@ and the API is not yet stable.
 
 ## [Unreleased]
 
+### Added
+- First-run setup wizard backend (`backend/apps/setup`): one-time token gate, singleton stage machine, and an allowlisted atomic `.env` writer ([#120](https://github.com/Pher217/OpenRemote-Control/pull/120)).
+- Setup wizard Telegram connection flow: `POST /api/setup/telegram/token` validates a pasted bot token via getMe, `POST /api/setup/telegram/discover` finds the operator's group via getUpdates, and the `/setup` page now guides both steps instead of only reporting state.
+
+### Security
+- Setup group discovery requires a wizard-issued challenge code in the group message. Telegram bot usernames are public and anyone can add a bot to their own group, so accepting any group message would let an attacker who messages the bot during the setup window land their own user id in the default-deny `TELEGRAM_ALLOWED_CHAT_IDS` allowlist.
+- Bot tokens are never echoed in responses, logs, or chained exception tracebacks.
+
 ## [0.1.0] - 2026-07-12
 
 First tagged release. Universal cross-tool `/remote-control`: dispatch any MCP-capable coding agent (Claude Code, Codex, and others) to a chat topic you already supervise, drive it from there, and stay in sync across every machine you enrol.

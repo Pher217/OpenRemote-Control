@@ -452,6 +452,57 @@ class TestSetupStateReopen:
         with pytest.raises(ValueError):
             state.advance_to(SetupState.STAGE_RUNTIMES)
 
+    def test_reopen_clears_the_telegram_challenge(self):
+        """
+        GIVEN a SetupState carrying a telegram challenge code
+        WHEN reopen() is called
+        THEN the challenge is cleared, so a reopened wizard never inherits a
+             stale discovery code
+        """
+        state = SetupState.load()
+        _walk_to_done(state)
+        state.telegram_challenge = "ORC-ABC234"
+        state.save(update_fields=["telegram_challenge"])
+        state.reopen()
+        assert state.telegram_challenge == ""
+
+
+@pytest.mark.django_db
+class TestTelegramChallenge:
+    def test_issue_returns_a_prefixed_code_and_persists_it(self):
+        """
+        GIVEN a fresh SetupState
+        WHEN issue_telegram_challenge() is called
+        THEN it returns an ORC-prefixed code and stores the same value
+        """
+        state = SetupState.load()
+        code = state.issue_telegram_challenge()
+        assert code.startswith("ORC-")
+        assert SetupState.load().telegram_challenge == code
+
+    def test_issue_rotates_the_code_on_each_call(self):
+        """
+        GIVEN a SetupState with a challenge already issued
+        WHEN issue_telegram_challenge() is called again
+        THEN a different code is minted (re-validating a token must not keep the
+             old code alive against a message already sent)
+        """
+        state = SetupState.load()
+        first = state.issue_telegram_challenge()
+        second = state.issue_telegram_challenge()
+        assert first != second
+
+    def test_clear_empties_the_code(self):
+        """
+        GIVEN a SetupState with a challenge issued
+        WHEN clear_telegram_challenge() is called
+        THEN the stored code is the empty string — the code is single-use
+        """
+        state = SetupState.load()
+        state.issue_telegram_challenge()
+        state.clear_telegram_challenge()
+        assert SetupState.load().telegram_challenge == ""
+
 
 @pytest.mark.django_db
 class TestSetupTokenTTLFromSettings:

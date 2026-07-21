@@ -41,6 +41,14 @@ SESSION_COOKIE_NAME = "orc_setup_session"
 #: Bytes of entropy per token (32 bytes -> 43-char urlsafe string).
 TOKEN_BYTES = 32
 
+#: Alphabet for the Telegram discovery challenge code. Excludes 0/O/1/I/L —
+#: characters an operator reading the code off a screen and typing it into a
+#: phone keyboard could easily transpose.
+TELEGRAM_CHALLENGE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
+
+#: How many characters follow the "ORC-" prefix.
+TELEGRAM_CHALLENGE_LENGTH = 6
+
 
 def hash_token(raw: str) -> str:
     """Return the hex SHA-256 of a raw token — what we persist and index on."""
@@ -146,6 +154,7 @@ class SetupState(models.Model):
     runtimes = models.JSONField(default=dict)
     completed_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
+    telegram_challenge = models.CharField(max_length=32, blank=True, default="")
 
     def __str__(self) -> str:
         return f"SetupState({self.stage})"
@@ -196,7 +205,21 @@ class SetupState(models.Model):
         self.completed_at = None
         self.providers = {}
         self.runtimes = {}
-        self.save(update_fields=["stage", "completed_at", "providers", "runtimes", "updated_at"])
+        # A completed setup implies a prior successful match already cleared the
+        # challenge, so this is belt-and-suspenders — but clearing it here means
+        # a reopened wizard never carries a stale code, independent of that
+        # reasoning. A fresh code is minted when the operator re-validates.
+        self.telegram_challenge = ""
+        self.save(
+            update_fields=[
+                "stage",
+                "completed_at",
+                "providers",
+                "runtimes",
+                "telegram_challenge",
+                "updated_at",
+            ]
+        )
 
     def set_provider(self, key: str, status: str) -> None:
         self.providers[key] = status
@@ -205,3 +228,32 @@ class SetupState(models.Model):
     def set_runtime(self, key: str, status: str) -> None:
         self.runtimes[key] = status
         self.save(update_fields=["runtimes", "updated_at"])
+
+    def issue_telegram_challenge(self) -> str:
+        """Mint and persist a fresh Telegram discovery challenge code.
+
+        Telegram gives us no way to authenticate "the operator" — anyone who
+        knows the bot's public username can add it to their own group and
+        message it during the discovery window. The challenge code is the
+        only trust anchor available: it is shown solely on the wizard page,
+        so requiring it in the group message binds the discovered chat to
+        someone who can actually see that page, not merely to whoever
+        messages the bot first.
+        """
+        code = "ORC-" + "".join(
+            secrets.choice(TELEGRAM_CHALLENGE_ALPHABET) for _ in range(TELEGRAM_CHALLENGE_LENGTH)
+        )
+        self.telegram_challenge = code
+        self.save(update_fields=["telegram_challenge", "updated_at"])
+        return code
+
+    def clear_telegram_challenge(self) -> None:
+        """Burn the challenge after a successful match — it is single-use.
+
+        Leaving it set would keep a known-good code valid indefinitely. The
+        code is visible to everyone in the operator's group once posted, so a
+        re-run of discovery could then be satisfied by an attacker replaying
+        that same code from a group of their own.
+        """
+        self.telegram_challenge = ""
+        self.save(update_fields=["telegram_challenge", "updated_at"])
