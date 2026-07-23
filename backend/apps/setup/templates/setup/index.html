@@ -1,23 +1,255 @@
 {% extends "setup/base.html" %}
 {% block body %}
   <h1>OpenRemote Control — Setup</h1>
-  <p class="muted">Stage: <code>{{ state.stage }}</code></p>
+  <p class="muted">Stage: <code id="stage-marker">{{ state.stage }}</code></p>
 
-  <h2>Chat providers</h2>
-  {% if state.connected_providers %}
-    <ul>{% for p in state.connected_providers %}<li>{{ p }} — connected</li>{% endfor %}</ul>
-  {% else %}
-    <p>None connected yet. At least one is required before continuing.</p>
+  {% if state.stage == "providers" %}
+    {{ state.connected_providers|json_script:"connected-providers-data" }}
+    <section data-marker="telegram-connect-card">
+      <h2>Connect a chat provider</h2>
+      <h3>Telegram</h3>
+
+      <div id="tg-step-1">
+        <p class="step-label">Step 1 — Create the bot</p>
+        <p>Open <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a>,
+        send <code>/newbot</code>, and copy the token it gives you.</p>
+        <label for="tg-token">Bot token</label><br>
+        <input type="password" id="tg-token" autocomplete="off" spellcheck="false">
+        <button type="button" id="tg-validate-btn">Validate</button>
+        <p id="tg-token-status" aria-live="polite"></p>
+      </div>
+
+      <div id="tg-step-2" hidden>
+        <p class="step-label">Step 2 — Create the group</p>
+        <p>Create a Telegram group, turn ON "Topics" in the group's settings, add
+        <a id="tg-bot-link" href="#" target="_blank" rel="noopener noreferrer">the bot</a>
+        as an admin, then send this exact code as a message in the group:</p>
+        <p><code id="tg-challenge" data-marker="telegram-challenge"></code></p>
+        <p class="muted">Anyone can find your bot by its username and add it to
+        a group of their own. This code is shown only on this page, so sending
+        it proves the group is yours — a group that has not sent it is ignored.
+        Do not share it outside your group.</p>
+      </div>
+
+      <div id="tg-step-3" hidden>
+        <p class="step-label">Step 3 — Detect the group</p>
+        <button type="button" id="tg-detect-btn">Detect group</button>
+        <p id="tg-detect-status" aria-live="polite"></p>
+      </div>
+
+      <p id="tg-connected-status" aria-live="polite" hidden></p>
+      <button type="button" id="tg-continue-btn" hidden>Continue</button>
+    </section>
   {% endif %}
 
-  <h2>Agent runtimes</h2>
-  {% if state.runtimes %}
-    <ul>{% for k, v in state.runtimes.items %}<li>{{ k }} — {{ v }}</li>{% endfor %}</ul>
-  {% else %}
-    <p>None detected yet.</p>
+  {% if state.stage == "runtimes" %}
+    <section data-marker="runtimes-section">
+      <h2>Agent runtimes</h2>
+      <p class="muted">Runtime auto-detect lands in the next phase.</p>
+      <button type="button" id="finish-btn">Finish setup</button>
+      <p id="finish-status" aria-live="polite"></p>
+      <p class="muted">Finishing setup closes this wizard for good — the next
+      load of this page will show "setup already complete" (410). That is
+      expected, not an error.</p>
+    </section>
   {% endif %}
 
-  <p class="muted">The guided provider and runtime flows land in the next phase.
-  This page currently reports state only; the <code>/api/setup/*</code> endpoints
-  are live and authenticated by your setup session.</p>
+  <script>
+    (function () {
+      "use strict";
+
+      function postJSON(url, body) {
+        return fetch(url, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body === undefined ? {} : body),
+        }).then(function (resp) {
+          return resp
+            .json()
+            .catch(function () {
+              return null;
+            })
+            .then(function (data) {
+              return { ok: resp.ok, status: resp.status, data: data };
+            });
+        });
+      }
+
+      function setStatus(node, text, kind) {
+        node.textContent = text;
+        node.className = kind || "";
+      }
+
+      function clearNode(node) {
+        while (node.firstChild) {
+          node.removeChild(node.firstChild);
+        }
+      }
+
+      var BOT_USERNAME_RE = /^[A-Za-z0-9_]{4,32}$/;
+
+      var step1 = document.getElementById("tg-step-1");
+      if (step1) {
+        var step2 = document.getElementById("tg-step-2");
+        var step3 = document.getElementById("tg-step-3");
+        var tokenInput = document.getElementById("tg-token");
+        var validateBtn = document.getElementById("tg-validate-btn");
+        var tokenStatus = document.getElementById("tg-token-status");
+        var botLink = document.getElementById("tg-bot-link");
+        var challengeNode = document.getElementById("tg-challenge");
+        var detectBtn = document.getElementById("tg-detect-btn");
+        var detectStatus = document.getElementById("tg-detect-status");
+        var connectedStatus = document.getElementById("tg-connected-status");
+        var continueBtn = document.getElementById("tg-continue-btn");
+
+        function showConnectedGroup(data) {
+          clearNode(detectStatus);
+          var line = document.createElement("span");
+          line.textContent = "Connected — " + data.title + " (" + data.chat_id + ")";
+          detectStatus.className = "ok";
+          detectStatus.appendChild(line);
+          if (!data.is_forum) {
+            var warn = document.createElement("p");
+            warn.className = "warn";
+            warn.textContent =
+              "Topics are off — each session needs its own topic, so turn " +
+              "Topics on in this group's settings.";
+            detectStatus.appendChild(warn);
+          }
+          continueBtn.hidden = false;
+        }
+
+        function skipToConnected() {
+          step1.hidden = true;
+          step2.hidden = true;
+          step3.hidden = true;
+          connectedStatus.hidden = false;
+          setStatus(connectedStatus, "Telegram is already connected.", "ok");
+          continueBtn.hidden = false;
+        }
+
+        var connectedDataNode = document.getElementById("connected-providers-data");
+        var connectedProviders = connectedDataNode ? JSON.parse(connectedDataNode.textContent) : [];
+        if (connectedProviders.indexOf("telegram") !== -1) {
+          skipToConnected();
+        }
+
+        validateBtn.addEventListener("click", function () {
+          var token = tokenInput.value.trim();
+          if (!token) {
+            setStatus(tokenStatus, "Paste the token BotFather gave you first.", "error");
+            return;
+          }
+          validateBtn.disabled = true;
+          setStatus(tokenStatus, "Validating…", "");
+          postJSON("/api/setup/telegram/token", { token: token }).then(function (result) {
+            if (!result.ok) {
+              setStatus(
+                tokenStatus,
+                (result.data && result.data.detail) || "That token did not validate.",
+                "error"
+              );
+              validateBtn.disabled = false;
+              return;
+            }
+            var username = result.data.username;
+            tokenInput.value = "";
+            tokenInput.remove();
+            setStatus(tokenStatus, "Validated @" + username, "ok");
+            if (BOT_USERNAME_RE.test(username)) {
+              botLink.href = "https://t.me/" + username;
+              botLink.textContent = "@" + username;
+            }
+            // textContent, never innerHTML: the code is server-generated from a
+            // fixed alphabet, but this element is the one place a Telegram-shaped
+            // response reaches the DOM, so keep it inert by construction.
+            challengeNode.textContent = result.data.challenge || "";
+            step2.hidden = false;
+            step3.hidden = false;
+          });
+        });
+
+        var detectAttempts = 0;
+        var maxDetectAttempts = 10;
+
+        function detectOnce() {
+          detectAttempts += 1;
+          setStatus(
+            detectStatus,
+            "Detecting… (attempt " + detectAttempts + "/" + maxDetectAttempts + ")",
+            ""
+          );
+          postJSON("/api/setup/telegram/discover").then(function (result) {
+            if (!result.ok) {
+              setStatus(
+                detectStatus,
+                (result.data && result.data.detail) || "Detection failed.",
+                "error"
+              );
+              detectBtn.disabled = false;
+              return;
+            }
+            if (result.data && result.data.found) {
+              showConnectedGroup(result.data);
+              return;
+            }
+            if (detectAttempts < maxDetectAttempts) {
+              setTimeout(detectOnce, 3000);
+              return;
+            }
+            setStatus(
+              detectStatus,
+              "Still nothing — send a message in the group and try again.",
+              "error"
+            );
+            detectBtn.disabled = false;
+          });
+        }
+
+        detectBtn.addEventListener("click", function () {
+          detectAttempts = 0;
+          detectBtn.disabled = true;
+          detectOnce();
+        });
+
+        continueBtn.addEventListener("click", function () {
+          continueBtn.disabled = true;
+          postJSON("/api/setup/advance", { stage: "runtimes" }).then(function (result) {
+            if (!result.ok) {
+              setStatus(
+                connectedStatus,
+                (result.data && result.data.detail) || "Could not continue.",
+                "error"
+              );
+              connectedStatus.hidden = false;
+              continueBtn.disabled = false;
+              return;
+            }
+            window.location.reload();
+          });
+        });
+      }
+
+      var finishBtn = document.getElementById("finish-btn");
+      if (finishBtn) {
+        var finishStatus = document.getElementById("finish-status");
+        finishBtn.addEventListener("click", function () {
+          finishBtn.disabled = true;
+          postJSON("/api/setup/complete").then(function (result) {
+            if (!result.ok) {
+              setStatus(
+                finishStatus,
+                (result.data && result.data.detail) || "Could not finish setup.",
+                "error"
+              );
+              finishBtn.disabled = false;
+              return;
+            }
+            window.location.reload();
+          });
+        });
+      }
+    })();
+  </script>
 {% endblock %}

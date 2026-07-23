@@ -188,6 +188,26 @@ messages to `/api/gateway/inbound`.  It authenticates with `MESSAGING_GATEWAY_TO
 Only platforms listed in `ENABLED_PLATFORMS` are started; the gateway logs a
 skip message for disabled platforms.
 
+### 5-pre. First-run setup wizard (`/setup`)
+
+A browser wizard at `http://127.0.0.1:8000/setup` can do the Telegram connection steps below for you. Mint a one-time link on the host:
+
+```bash
+docker compose exec web python manage.py setup_token
+```
+
+Open the printed URL. The wizard validates your bot token, then issues a short challenge code (`ORC-XXXXXX`) that you send as a message in your Telegram group; it uses that message to identify the group and allowlist you, and writes the values into `deploy/.env`.
+
+**Stop the Telegram bot before re-running setup.** Telegram delivers each update to exactly one `getUpdates` consumer. If `run_telegram_bot` is live while the wizard polls for your challenge message, the bot consumes the message first and the wizard will never see it — detection loops and then reports that nothing arrived. Stop the bot service, complete the wizard, then start it again:
+
+```bash
+docker compose stop telegram-bot
+# …complete the wizard…
+docker compose start telegram-bot
+```
+
+Setup closes permanently once finished. To re-open it later, run `manage.py setup_token --reopen`.
+
 ### 5a. Single messaging app of choice
 
 ORC routes every session notification and approval prompt to **one** messaging

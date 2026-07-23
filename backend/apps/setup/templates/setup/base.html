@@ -13,6 +13,21 @@
     .muted { opacity: .7; font-size: .9rem; }
     code { background: rgba(127,127,127,.15); padding: .1rem .35rem; border-radius: .25rem; }
     ul { padding-left: 1.2rem; }
+    section { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(127,127,127,.25); }
+    .step-label { font-weight: 600; margin-bottom: .25rem; }
+    label { display: inline-block; margin-bottom: .35rem; }
+    input[type="password"] { font: inherit; padding: .35rem .5rem; min-width: 22rem; max-width: 100%; }
+    button { font: inherit; padding: .4rem .9rem; margin-left: .5rem; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; }
+    .ok { color: #1a7f37; font-weight: 600; }
+    .error { color: #c62828; font-weight: 600; }
+    .warn { color: #b25f00; font-weight: 600; }
+    /* The light-mode shades above fall below contrast on a dark background. */
+    @media (prefers-color-scheme: dark) {
+      .ok { color: #4ac26b; }
+      .error { color: #ff6b6b; }
+      .warn { color: #e3a008; }
+    }
   </style>
 </head>
 <body>{% block body %}{% endblock %}</body>
